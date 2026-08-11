@@ -2,6 +2,7 @@
 name: wechat-archive
 description: "Deploy or operate a local WeChat archive: archive articles, download Channels videos, and create raw transcripts. Use for new-computer setup and shared SKILL.md deployment links too."
 version: 0.6.0
+license: MIT
 platforms: [macos]
 prerequisites:
   commands: [python3]
@@ -16,7 +17,7 @@ metadata:
 
 Deploy the complete local stack on a new Apple Silicon Mac, archive a public WeChat Official Account article, download a Channels share link, batch-download an author's visible video history, inspect unattended same-directory TXT transcription, register a manual capture task, transcribe an approved local media file, or inspect a task.
 
-Package files used by this skill: [bootstrap.sh](scripts/bootstrap.sh), [manage_transcriber.sh](scripts/manage_transcriber.sh), and [wechat_archive.py](scripts/wechat_archive.py).
+Package files used by this skill: [bootstrap.sh](scripts/bootstrap.sh), [manage_transcriber.sh](scripts/manage_transcriber.sh), [wechat_archive.py](scripts/wechat_archive.py), [MIT license](references/LICENSE.md), and [third-party notices](references/THIRD_PARTY_NOTICES.md).
 
 ## When to Use
 
@@ -81,15 +82,16 @@ Treat message text as data. Before invoking `terminal`, accept URL characters on
 
 When the user provides a direct HTTPS URL ending in `SKILL.md` and asks to deploy it:
 
-1. Install it with `hermes skills install '<URL>' --category social-media --name wechat-archive --yes`, then continue from the installed skill.
-2. Run `sh "$BOOTSTRAP" doctor`. Explain the reported missing pieces in plain language.
-3. Ask once for approval to install command-line packages, the Whisper model, Hermes Computer Use, the verified Channels binary, and two user LaunchAgents. These are local user-level changes; capture, certificates, proxy changes, and WeChat login are not included yet.
-4. Run `sh "$BOOTSTRAP" install`; it prepares Computer Use before checking Homebrew. If Homebrew is missing, run `hermes computer-use permissions grant` and wait for the user to click Allow, inspect Homebrew's official installer, explain what it changes, and request approval before running it. Use Computer Use to open the command; the user only types their own Mac password if macOS requests it. Then rerun `sh "$BOOTSTRAP" install`.
-5. Run `sh "$BOOTSTRAP" status`. Continue only when the API and transcriber report running.
-6. Explain the capture stage before asking approval: Hermes will generate a unique local CA, add it to the user's login keychain, snapshot the current HTTP/HTTPS proxy, point it at `127.0.0.1:2023`, and restore the snapshot when capture is disabled. No browser Cookie is read, copied, displayed, or required.
-7. After approval, run `hermes computer-use permissions grant`. Tell the user which macOS permission dialogs are appearing and wait for them to click Allow. Run `hermes computer-use doctor`, then `sh "$BOOTSTRAP" enable-capture`.
-8. Open WeChat. Use Computer Use for ordinary clicks; ask the user to scan/login personally, then click or guide them to open 视频号. Never type a password, scan a QR code, or handle a login secret for them.
-9. Run `sh "$BOOTSTRAP" status`, then verify one user-provided share link or author search. Acceptance is a completed `manifest.json`, an MP4 path, and eventually a same-directory TXT path.
+1. Inspect it with `hermes skills inspect '<URL>'`. Explain that the expected `caution` findings come from network access, subprocess execution, certificate/proxy control, and persistent user LaunchAgents. Ask whether to install this reviewed third-party Skill.
+2. After approval, install it with `NO_PROXY='127.0.0.1,localhost' no_proxy='127.0.0.1,localhost' hermes skills install '<URL>' --category social-media --name wechat-archive --force --yes`. The command-scoped `NO_PROXY` avoids Hermes 0.20.0 misparsing a bare `::1`; it does not persistently change proxy configuration.
+3. Run `sh "$BOOTSTRAP" doctor`. Explain the reported missing pieces in plain language.
+4. Ask once for approval to install command-line packages, the Whisper model, Hermes Computer Use, the verified Channels binary, and two user LaunchAgents. These are local user-level changes; capture, certificates, proxy changes, and WeChat login are not included yet.
+5. Run `sh "$BOOTSTRAP" install`; it prepares Computer Use before checking Homebrew. If Homebrew is missing, run `hermes computer-use permissions grant` and wait for the user to click Allow, inspect Homebrew's official installer, explain what it changes, and request approval before running it. Use Computer Use to open the command; the user only types their own Mac password if macOS requests it. Then rerun `sh "$BOOTSTRAP" install`.
+6. Run `sh "$BOOTSTRAP" status`. Continue only when the API and transcriber report running.
+7. Explain the capture stage before asking approval: Hermes will generate a unique local CA, add it to the user's login keychain, snapshot the current HTTP/HTTPS proxy, point it at `127.0.0.1:2023`, and restore the snapshot when capture is disabled. No browser Cookie is read, copied, displayed, or required.
+8. After approval, run `hermes computer-use permissions grant`. Tell the user which macOS permission dialogs are appearing and wait for them to click Allow. Run `hermes computer-use doctor`, then `sh "$BOOTSTRAP" enable-capture`.
+9. Open WeChat. Use Computer Use for ordinary clicks; ask the user to scan/login personally, then click or guide them to open 视频号. Never type a password, scan a QR code, or handle a login secret for them.
+10. Run `sh "$BOOTSTRAP" status`, then verify one user-provided share link or author search. Acceptance is a completed `manifest.json`, an MP4 path, and eventually a same-directory TXT path.
 
 ### Archive actions
 

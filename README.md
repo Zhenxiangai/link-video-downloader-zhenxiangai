@@ -4,7 +4,13 @@ A local-first macOS CLI and Hermes Skill for archiving public WeChat articles, d
 
 ## Give one link to Hermes
 
-Send this exact URL to Hermes and say “部署这个链接”:
+Send this repository URL to Hermes and say “部署这个开源项目”:
+
+```text
+https://github.com/Zhenxiangai/wechat-archive
+```
+
+Hermes will inspect the fixed Skill entry below, explain its expected security-scan warnings, and ask before installing it:
 
 ```text
 https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md
@@ -104,8 +110,10 @@ Official repository: <https://github.com/Zhenxiangai/wechat-archive>
 Hermes can install the tagged release directly:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md' --category social-media --name wechat-archive --yes
+NO_PROXY='127.0.0.1,localhost' no_proxy='127.0.0.1,localhost' hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
+
+The `--force` is expected because Hermes flags this Skill's intentional network, subprocess, certificate/proxy, and LaunchAgent operations as `caution`. Hermes should show that result and obtain approval first. The command-scoped `NO_PROXY` values only work around Hermes 0.20.0's bare-IPv6 parsing issue; they do not rewrite the user's saved proxy settings.
 
 Install this directory as a local Hermes Skill, for example:
 
