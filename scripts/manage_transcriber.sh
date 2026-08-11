@@ -1,11 +1,27 @@
 #!/bin/sh
 set -eu
 
-label="com.wechatarchive.transcriber"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 worker="$script_dir/wechat_archive.py"
 archive_root=${WECHAT_ARCHIVE_ROOT:-"$HOME/Documents/WeChatArchive"}
-work_dir="$archive_root/jobs/channel-transcriber"
+case "${WECHAT_WORKER_KIND:-channel}" in
+    channel)
+        label="com.wechatarchive.transcriber"
+        work_dir="$archive_root/jobs/channel-transcriber"
+        worker_action="watch-channel-transcripts"
+        status_action="transcriber-status"
+        ;;
+    content)
+        label="com.wechatarchive.content"
+        work_dir="$archive_root/jobs/content-worker"
+        worker_action="watch-content"
+        status_action="content-worker-status"
+        ;;
+    *)
+        echo "invalid worker kind" >&2
+        exit 64
+        ;;
+esac
 plist="$HOME/Library/LaunchAgents/$label.plist"
 domain="gui/$(id -u)"
 
@@ -50,7 +66,7 @@ install_worker() {
     plist_add "Add :ProgramArguments array"
     plist_add "Add :ProgramArguments:0 string $python_path"
     plist_add "Add :ProgramArguments:1 string $worker"
-    plist_add "Add :ProgramArguments:2 string watch-channel-transcripts"
+    plist_add "Add :ProgramArguments:2 string $worker_action"
     plist_add "Add :ProgramArguments:3 string --interval"
     plist_add "Add :ProgramArguments:4 string 10"
     plist_add "Add :EnvironmentVariables dict"
@@ -78,7 +94,7 @@ status_worker() {
     python_path=$(resolve_command "${WECHAT_PYTHON:-}" python3)
     launchctl print "$domain/$label" >/dev/null
     echo "launchd: running"
-    "$python_path" "$worker" transcriber-status
+    "$python_path" "$worker" "$status_action"
 }
 
 uninstall_worker() {

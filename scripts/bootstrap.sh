@@ -170,7 +170,35 @@ proxy:
     enabled: false
     hostname: 127.0.0.1
     port: 9900
+mp:
+  enabled: true
+  refreshskipminutes: 20
 EOF
+}
+
+ensure_mp_enabled() {
+    python3 - "$backend_config" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+start = next((i for i, line in enumerate(lines) if line == "mp:"), None)
+if start is None:
+    lines.extend(["mp:", "  enabled: true", "  refreshskipminutes: 20"])
+else:
+    end = next((i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()), len(lines))
+    enabled = next((i for i in range(start + 1, end) if lines[i].strip().startswith("enabled:")), None)
+    if enabled is None:
+        lines.insert(start + 1, "  enabled: true")
+    else:
+        lines[enabled] = lines[enabled][: len(lines[enabled]) - len(lines[enabled].lstrip())] + "enabled: true"
+temporary = path.with_suffix(path.suffix + ".tmp")
+temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o600)
+os.replace(temporary, path)
+PY
 }
 
 install_backend() {
@@ -194,6 +222,7 @@ install_backend() {
         find "$temporary_dir" -depth -delete
     fi
     write_backend_config
+    ensure_mp_enabled
 }
 
 plist_add() {
@@ -239,6 +268,8 @@ install_all() {
     install_backend
     install_backend_service
     WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
+        sh "$script_dir/manage_transcriber.sh" install
+    WECHAT_WORKER_KIND=content WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
         sh "$script_dir/manage_transcriber.sh" install
     status
 }
@@ -315,7 +346,7 @@ PY
 )
     api_post /api/proxy/config "$proxy_json"
     echo "capture=enabled"
-    echo "action_required=open_wechat_login_and_open_channels"
+    echo "action_required=open_wechat_login_and_requested_content"
 }
 
 restore_proxy() {
@@ -356,6 +387,12 @@ status() {
         WECHAT_ARCHIVE_ROOT="$archive_root" sh "$script_dir/manage_transcriber.sh" status
     else
         echo "transcriber=stopped"
+    fi
+    if launchctl print "$domain/com.wechatarchive.content" >/dev/null 2>&1; then
+        echo "content_worker=running"
+        WECHAT_WORKER_KIND=content WECHAT_ARCHIVE_ROOT="$archive_root" sh "$script_dir/manage_transcriber.sh" status
+    else
+        echo "content_worker=stopped"
     fi
 }
 
