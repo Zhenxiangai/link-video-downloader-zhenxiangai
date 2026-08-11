@@ -8,7 +8,7 @@
 
 A local-first macOS CLI and Hermes Skill that turns a WeChat Channels link or creator name into an organized local archive: MP4, same-name raw transcript, and a traceable manifest.
 
-![Local archive flow from a shared link to video, transcript, and manifest](./docs/assets/hero-zh.png)
+![Local archive flow from a shared link to video, transcript, and manifest](./docs/assets/social-preview.jpg)
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#requirements)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-Skill-0ea5e9)](./SKILL.md)

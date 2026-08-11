@@ -8,7 +8,7 @@
 
 **简体中文** · [English](./README_EN.md)
 
-![微信内容本地归档流程：链接、视频、本地归档、逐字稿与清单](./docs/assets/hero-zh.png)
+![微信内容本地归档流程：链接、视频、本地归档、逐字稿与清单](./docs/assets/social-preview.jpg)
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#运行环境)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-Skill-0ea5e9)](./SKILL.md)
