@@ -191,6 +191,7 @@ sh ./scripts/bootstrap.sh disable-capture
 - 用一个公开分享链接跑通流程并反馈结果；
 - 改进中文或英文说明；
 - 把项目分享给需要视频号归档、内容研究或本地知识库的朋友；
+- 直接复用[中英文推广发布素材](./docs/LAUNCH_KIT.md)；
 - 点一个 [Star](https://github.com/Zhenxiangai/wechat-archive) 关注后续版本。
 
 ## 许可证与第三方组件

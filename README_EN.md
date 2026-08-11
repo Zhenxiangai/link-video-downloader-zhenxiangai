@@ -217,7 +217,7 @@ Hermes can then archive explicit URLs, search or download Channels authors, insp
 
 [Issues](https://github.com/Zhenxiangai/wechat-archive/issues) are welcome for real-world results, broken public samples, documentation improvements, and platform-adaptation ideas. Never upload Cookies, certificates, account data, real MP4/TXT archives, or manifests containing personal paths.
 
-You can also help without writing code: verify one public link, improve a translation, share the project with an archive or research community, or [Star the repository](https://github.com/Zhenxiangai/wechat-archive).
+You can also help without writing code: verify one public link, improve a translation, reuse the [bilingual launch kit](./docs/LAUNCH_KIT.md), share the project with an archive or research community, or [Star the repository](https://github.com/Zhenxiangai/wechat-archive).
 
 ## Licensing
 
