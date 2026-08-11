@@ -1,108 +1,90 @@
-# WeChat Archive Launch Kit / 推广发布素材
+# 一站式多平台视频内容提取器 / Launch Kit
 
-Canonical link / 统一入口：<https://github.com/Zhenxiangai/wechat-archive>
+统一仓库：<https://github.com/Zhenxiangai/wechat-archive>
 
-Social preview / 分享配图：[social-preview.jpg](./assets/social-preview.jpg)
+分享配图：[social-preview.jpg](./assets/social-preview.jpg)
+
+> `v1.0.0` 真实标签发布后，机器安装入口为 <https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.0/SKILL.md>。标签出现前不发布该链接。
 
 ## 中文短帖
 
-我开源了一个本地优先的微信视频号归档工具：把分享链接或博主名称发给 Hermes，它会在 Mac 上完成单链下载、博主历史完整分页、批量任务和进度追踪；MP4 下载完成后，还会无人值守生成同目录、同名的原始 TXT 逐字稿。
+我开源了 **一站式多平台视频内容提取器**：把微信视频号、B站、小红书或抖音链接发给 Hermes，它会在 Apple Silicon Mac 上生成整洁的本地内容包。
 
-真实流程已跑通 14 页、发现并创建 203 条任务，保留 22 个 MP4，并自动生成 22 个 TXT，最终 `pending=0`、`failed=0`。
+视频目录只保留一个正式视频，并生成带时间线的 `原始逐字稿.txt/.srt/.json`；小红书图文保留正文与配图。视频号保留当前可见历史批量能力，公众号代码保留但不属于本次 V1 发布基线。
 
-项目面向 Apple Silicon Mac，数据默认只保存在本机。证书、系统代理和微信登录都由 Hermes 先解释、再等用户授权，不需要手工复制 Cookie。
+内容、Cookie 和登录态默认留在用户自己的 Mac；Chrome Cookie 导入、微信 CA/代理和登录都是分开授权动作。
 
 GitHub：<https://github.com/Zhenxiangai/wechat-archive>
-
-如果它也解决了你的内容归档问题，欢迎试用、提 Issue 或点一个 Star。
 
 ## 中文长帖
 
 ### 标题
 
-开源了一个微信视频号本地归档工具：链接或博主历史 → MP4 + 原始逐字稿
+开源：一个项目提取视频号、B站、小红书和抖音
 
 ### 正文
 
-做内容研究或知识库时，我一直缺少一条完整的微信视频号归档链路：不只是下载某一条视频，还要能搜索博主、处理同名候选、遍历当前可见的历史作品、批量建任务，并在下载后自动得到可搜索的原始逐字稿。
+做内容研究和知识库时，真正麻烦的不是“下载某一条视频”，而是不同平台有不同入口、登录态、文件名和失败状态。
 
-所以我把这套本机流程整理成了开源项目 **wechat-archive**。
+所以我把现有 `wechat-archive` 扩展成了 **一站式多平台视频内容提取器**。
 
 它目前可以：
 
-- 下载单条微信视频号分享链接；
-- 搜索博主并返回同名候选；
-- 完整分页读取博主当前可见作品；
-- 批量创建任务，并用 `job_id` 查询进度；
-- 为每个任务保留 `manifest.json`；
-- MP4 完成后，无人值守生成同目录、同名的原始 TXT；
-- 归档公开微信公众号文章；
-- 通过 Hermes 用自然语言部署和调用。
+- 用同一个 `extract --url` 自动识别视频号、B站、小红书和抖音；
+- 把视频、正文、配图和任务清单放在标题目录中；
+- 对视频生成带时间线的三种中文名原始逐字稿；
+- 只保留一个正式视频，不把备用路线产物复制进目录；
+- 使用 `content-*` / `batch-*` 和 `manifest.json` 跟踪下载、转写、授权等待、完成与失败；
+- 保留视频号博主当前可见历史批量；
+- 通过 Hermes 自然语言安装、提交和查询任务。
 
-真实验收中，它遍历了 14 页，发现并创建 203 条任务；我按跑通流程的目标保留 22 个 MP4，后台转写 worker 最终生成 22 个同名 TXT，状态为 `pending=0`、`failed=0`。
+新统一链路已真实跑通 B站 1080P、小红书图文/视频、抖音视频和视频号 1080P。四个视频任务都只有一个正式视频和三种中文名逐字稿，所有正式产物均与 manifest 的字节数和 SHA-256 一致。
 
-这个项目坚持 local-first：真实视频、逐字稿和 manifest 默认只留在自己的 Mac。它不会把系统代理、证书或微信登录藏在“一键安装”背后；Hermes 会先说明具体变化，再等待电脑主人批准、点击或亲自登录。默认单链接路径不读取浏览器 Cookie。
+项目坚持 local-first。它不会把 Cookie、证书、系统代理或登录藏在一次静默安装中；Hermes 会先说明变化，再等用户批准、点击或亲自登录。
 
-当前自动部署只验收了 Apple Silicon Mac，微信页面变化也可能需要继续适配。逐字稿保留 Whisper 的原始识别结果，不自动润色、总结或翻译。
-
-仓库与安装入口：<https://github.com/Zhenxiangai/wechat-archive>
-
-如果你也在做内容归档、AI 知识库或视频研究，欢迎试用并把真实结果告诉我。觉得有用的话，也欢迎点一个 Star，让更多有同样需求的人看到它。
+仓库：<https://github.com/Zhenxiangai/wechat-archive>
 
 ## English short post
 
-I open-sourced **wechat-archive**, a local-first WeChat Channels archiver for Apple Silicon Macs.
+I open-sourced a **one-stop multi-platform video content extractor** for Apple Silicon Macs.
 
-Give Hermes a share link or creator name. It can resolve a single video, return same-name creator candidates, paginate currently visible creator history, create batch jobs, and track every run with a `job_id` and `manifest.json`. Completed MP4 files are transcribed unattended into same-directory, same-name raw TXT files.
+Give Hermes one WeChat Channels, Bilibili, Xiaohongshu, or Douyin link. It creates an organized local package with one formal video when applicable, Chinese-named timestamped raw TXT/SRT/JSON transcripts, Xiaohongshu post text and images, plus a traceable manifest.
 
-One real acceptance run covered 14 pages and 203 queued items, kept 22 MP4 files, and produced 22 TXT transcripts with `pending=0` and `failed=0`.
-
-Archive data stays local. Certificate, proxy, and WeChat-login steps are explained and approved separately; the default single-link path does not read a browser Cookie.
+Channels creator history remains available. Official Account code is retained but paused outside the V1 release baseline. Cookies, CAs, proxy changes, and account login remain separate approvals.
 
 GitHub: <https://github.com/Zhenxiangai/wechat-archive>
-
-Feedback, Issues, and Stars are welcome.
 
 ## English long post
 
 ### Title
 
-Show HN: A local-first WeChat Channels archiver with unattended transcription
+Show HN: One local extractor for WeChat, Bilibili, Xiaohongshu, and Douyin
 
 ### Body
 
-I built **wechat-archive** because saving one video was only a small part of the actual workflow. For research and knowledge-base work, I needed to start from either a share link or creator name, handle same-name candidates, paginate the creator's currently visible history, create batch jobs, and keep the resulting media traceable.
+I expanded **wechat-archive** from a WeChat Channels workflow into a one-stop local content extractor for WeChat Channels, Bilibili, Xiaohongshu, and Douyin.
 
-The project currently supports:
+One `extract --url` command identifies the platform and creates a central job. The resident worker produces an organized content package: exactly one formal video when applicable, Chinese-named timestamped raw TXT/SRT/JSON transcripts, article Markdown and local images, plus a manifest with status, byte counts, and hashes.
 
-- single WeChat Channels share-link downloads;
-- creator search with same-name candidates;
-- full pagination of currently visible creator posts;
-- batch task creation with `job_id` progress;
-- a `manifest.json` for every archive job;
-- unattended MP4-to-same-name raw TXT transcription;
-- public WeChat Official Account article archiving;
-- natural-language deployment and operation through Hermes.
+The project retains Channels creator-history batches. Bilibili, Xiaohongshu, and Douyin use a pinned transparent derivative core that remains runnable if its upstream disappears. Official Account code is retained but paused outside the V1 release baseline.
 
-In one real acceptance run, it paginated 14 pages and queued 203 items. I kept 22 completed MP4 files for the workflow test, and the unattended worker produced 22 same-directory TXT transcripts with `pending=0` and `failed=0`.
+The unified path has completed real Bilibili 1080p, Xiaohongshu image-text/video, Douyin video, and WeChat Channels 1080p. Every video package has exactly one formal video and three Chinese-named transcript files, and every formal artifact matches its manifest byte count and SHA-256.
 
-The project is local-first: MP4 files, transcripts, and manifests stay on the owner's Mac. Certificate, system-proxy, and WeChat-login steps are not hidden behind a silent installer. Hermes explains each stage and waits for the computer owner to approve, click, or log in personally. The default single-link path does not read a browser Cookie.
-
-Automated onboarding has currently been verified on Apple Silicon Macs only. WeChat page changes may require adapter updates, and raw Whisper transcripts can contain recognition mistakes, so the original MP4 and manifest remain the source of truth.
+Archive data stays local. Cookie import, local CA/system proxy, and account login are explained and approved separately.
 
 Repository: <https://github.com/Zhenxiangai/wechat-archive>
 
-Real-world feedback, documentation improvements, Issues, and Stars are welcome.
+## 建议标签 / Suggested tags
 
-## Suggested tags
+中文：`#开源` `#多平台视频` `#内容归档` `#语音转文字` `#AI Agent` `#Hermes`
 
-中文：`#微信视频号` `#开源` `#内容归档` `#语音转文字` `#AI Agent` `#Hermes`
+English: `#opensource` `#localfirst` `#transcription` `#aiagents` `#macOS`
 
-English: `#opensource` `#localfirst` `#wechat` `#transcription` `#aiagents` `#macOS`
+## 发布前准确性清单
 
-## Accuracy checklist
-
-- Do not claim Windows or Intel Mac support.
-- Do not describe raw TXT as polished copy or perfect transcription.
-- Do not publish Cookies, certificates, account data, MP4/TXT archives, or manifests containing personal paths.
-- Use the repository homepage as the human sharing link and the fixed `v0.6.0/SKILL.md` URL as the machine installation entry.
+- 四个平台真实单链接、唯一视频、逐字稿和 manifest 全部通过。
+- `v1.0.0/SKILL.md` 实际可读后才发布机器安装链接。
+- 不宣称 Windows、Linux 或 Intel Mac 支持。
+- 不把原始逐字稿描述为完美文案。
+- 不发布 Cookie、证书、账号数据、真实媒体/逐字稿或含个人路径的 manifest。
+- 明确软件许可证不授予平台内容抓取、转载、传播或商业使用权。

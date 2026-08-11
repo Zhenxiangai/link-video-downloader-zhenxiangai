@@ -1,38 +1,60 @@
 # Third-party notices
 
-This package does not bundle the following programs, model weights, account state, certificates, or proxy configuration. Users obtain and run them separately under their respective terms.
+The root MIT license covers ZhenxiangAI original files and files explicitly released under MIT. It does not relicense the complete runtime stack, third-party source, platform services, or content.
+
+## ZhenxiangAI transparent derivative core
+
+- Upstream project: <https://github.com/yt-dlp/yt-dlp>
+- Upstream release: `2026.07.04`
+- Audited commit: `fdec00e0bf530dc6c3cc7b1dd780e95d9ae460e9`
+- Upstream project credits: pukkandan, current yt-dlp maintainers, and contributors
+- License: Unlicense
+
+A pinned derivative runtime subset is distributed under `vendor/transparent-core/yt_dlp/`. It includes only the Bilibili, Xiaohongshu, TikTok/Douyin, and unsupported-URL Generic fallback extractors plus their required runtime support; all other upstream extractors are omitted. The original `LICENSE`, `UPSTREAM.md`, and `THIRD_PARTY_LICENSES.txt` are retained. ZhenxiangAI maintains the product integration and derivative snapshot; the vendored upstream source is not represented as ZhenxiangAI original work.
 
 ## wx_channels_download
 
 - Source: <https://github.com/ltaoo/wx_channels_download>
-- Locally audited revision: `1caadf786151baa1fdc28900aaaf9433491a81cb`
+- Audited source revision: `1caadf786151baa1fdc28900aaaf9433491a81cb`
+- Downloaded release: `v260810`
+- Release archive SHA-256: `505c6a56dbc2252139c795918a68e4860a6cd62057eefd9fbad7b21a5b6cff6e`
+- Binary SHA-256: `0e5b490458847b2bb6982f9efa57ccaee7160a92b09734bb892f1aa6de6bbd7c`
 - License: MIT with Commons Clause License Condition v1.0
 
-The Commons Clause states that the license does not grant the right to sell the software, where “sell” includes a paid product or service whose value derives substantially from its functionality. This repository does not redistribute its source or binary; the bootstrap downloads the fixed upstream release directly. Review the upstream license and obtain separate permission when commercial use may fall within that restriction.
+The repository does not bundle this source or binary; bootstrap downloads the fixed upstream release. Upstream has not established that the fixed release binary maps exactly to the audited source revision. The Commons Clause restricts selling software whose value derives substantially from this component; obtain separate permission when commercial use may fall within that condition.
 
 ## whisper.cpp
 
 - Source: <https://github.com/ggml-org/whisper.cpp>
-- Locally verified version: `1.9.2`
+- Verified release: `v1.9.2`
+- Verified commit: `306c88f4d1286aec1bf96e544632897886af5501`
 - License: MIT
 
-This package invokes an independently installed `whisper-cli` executable.
+The project invokes an independently installed `whisper-cli`; it does not bundle the binary or source.
 
 ## FFmpeg
 
 - Source: <https://ffmpeg.org/>
-- Locally verified Homebrew version: `8.1.2`
+- Verified upstream release: `n8.1.2`
+- Verified upstream commit: `38b88335f99e76ed89ff3c93f877fdefce736c13`
+- Verified Homebrew formula build: `8.1.2_1`
+- Locally applicable license: GPL-3.0-or-later because the verified build enables GPL components
 
-This package invokes an independently installed `ffmpeg` executable. FFmpeg licensing depends on its build configuration. The locally verified Homebrew build enables GPL components and reports GPL version 3 or later; distributors of an FFmpeg binary must comply with the license of the binary they ship.
+The project invokes an independently installed `ffmpeg`. Anyone distributing an FFmpeg binary must comply with that binary's build-specific licenses.
 
 ## Whisper model weights
 
-- Verified file: `ggml-small.bin`
+- File: `ggml-small.bin`
 - Source revision: `c521a4b02f422512d734391fdf08bb08c0862f68`
 - SHA-256: `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`
+- Source license: OpenAI MIT
 
-Model weights are not included. Review the terms at the selected model source before redistributing them.
+Bootstrap downloads and verifies the model. Model weights are not committed or included in a Release.
 
-## Project license
+## Bilibili runtime services
 
-The original files in this repository are released under the MIT License in `LICENSE`. Third-party programs and model weights remain governed by the terms above.
+The Bilibili API/CDN route is a runtime platform interface, not an official or open API grant. Bilibili terms, robots policy, account permissions, and content rights continue to apply. Access to an endpoint and the transparent core's Unlicense do not grant rights to automate retrieval, republish, distribute, or commercially use platform content.
+
+## Distribution boundary
+
+Source releases may include ZhenxiangAI original code, the transparent derivative source, its real licenses, and these notices. They exclude FFmpeg, whisper.cpp, model weights, the Channels backend binary, Cookies, account/login state, certificates, proxy configuration, and real archive content.
