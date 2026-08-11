@@ -1,8 +1,10 @@
 <div align="center">
 
-# 微信内容本地归档 · Hermes Skill
+# 微信视频号本地归档与自动转写 · Hermes Skill
 
-把一个链接发给 Hermes，让视频、原始逐字稿和归档清单都留在自己的 Mac。
+**微信视频号下载 · 博主历史批量归档 · MP4 自动生成原始 TXT · Hermes 一键部署**
+
+把分享链接或博主名称发给 Hermes，让视频、逐字稿和归档清单都留在自己的 Mac。
 
 **简体中文** · [English](./README_EN.md)
 
@@ -11,12 +13,15 @@
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#运行环境)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-Skill-0ea5e9)](./SKILL.md)
 [![Local first](https://img.shields.io/badge/Data-Local--first-10b981)](#文件最后在哪里)
-[![Release](https://img.shields.io/badge/release-v0.6.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/tree/v0.6.0)
+[![Release](https://img.shields.io/badge/release-v0.6.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/releases/tag/v0.6.0)
 [![MIT License](https://img.shields.io/badge/license-MIT-f59e0b)](./LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/Zhenxiangai/wechat-archive?style=social)](https://github.com/Zhenxiangai/wechat-archive/stargazers)
+
+如果它刚好解决了你的内容归档问题，欢迎点一个 **Star**，让更多需要本地保存微信内容的人看到它。
 
 </div>
 
-## 给 Hermes 一个链接，就从这里开始
+## 30 秒开始
 
 把下面这句话直接发给 Hermes：
 
@@ -35,6 +40,15 @@ https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md
 > [!IMPORTANT]
 > 目前面向 Apple Silicon Mac。证书、系统代理和微信登录不会被静默处理；Hermes 必须先解释，再等用户授权或点击。
 
+安装完成后，可以直接对 Hermes 说：
+
+```text
+下载这个视频号链接：https://weixin.qq.com/sph/...
+搜索视频号博主「博主名称」，把同名候选列给我
+把这个博主当前可见的作品全部归档
+查看 job_id 为 channel-... 的下载和转写进度
+```
+
 ## 它解决什么问题
 
 | 视频号归档 | 原始逐字稿 | 全程可追踪 |
@@ -42,6 +56,24 @@ https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md
 | 下载单条分享链接，搜索博主并返回同名候选，完整分页读取当前可见作品并批量建任务 | MP4 下载完成后自动生成同目录、同文件名的 TXT；保留原语言，不润色、不总结、不翻译 | 每次任务都有 `job_id`、进度与 `manifest.json`，能看见完成、等待和失败状态 |
 
 同时支持公开微信公众号文章归档，以及通过 Hermes 自然语言调用常用动作。
+
+## 谁会用得上
+
+- **内容创作者与运营**：长期保存自己或公开账号的视频素材，并快速取得原始口播稿；
+- **研究者与知识库用户**：把分散在视频号里的内容整理为本地可搜索的 MP4、TXT 和 manifest；
+- **团队资料管理员**：批量归档博主当前可见作品，并用 `job_id` 跟踪进度；
+- **AI Agent 用户**：让 Hermes 负责部署、调用和状态查询，自己只处理必要的点击与登录。
+
+## 它不只是一个下载脚本
+
+| 常见需求 | 本项目的处理方式 |
+|---|---|
+| 手里只有一条分享链接 | 解析并创建下载任务，返回可追踪的 `job_id` |
+| 只记得博主名称 | 返回同名候选，选定后完整分页读取当前可见作品 |
+| 想保存整个博主历史 | 批量建任务，并持续汇总完成、暂停与失败状态 |
+| 下载后还要听写 | MP4 完成后无人值守生成同目录、同名原始 TXT |
+| 文件越来越多 | 每个任务保留 `manifest.json`，记录来源、产物和进度 |
+| 新电脑不会部署 | 把仓库链接发给 Hermes，由它解释并分阶段完成安装 |
 
 ## 小白用户会经历什么
 
@@ -85,6 +117,8 @@ flowchart LR
 - MP4 完成后无人值守生成同名原始 TXT；
 - 归档公开微信公众号文章；
 - 让 Hermes 用自然语言完成以上操作。
+
+这里刻意不包含自动润色、总结或翻译：原始逐字稿是稳定底稿，任何二次加工都应另存为派生文件。
 
 ## 文件最后在哪里
 
@@ -141,6 +175,24 @@ sh ./scripts/bootstrap.sh disable-capture
 - 初次安装时可访问互联网；
 - 实际采集视频号时，由用户本人登录微信客户端。
 
+## 已知边界
+
+- 当前自动部署只验收了 Apple Silicon Mac；
+- 视频号采集依赖已登录的微信客户端和用户单独批准的本机采集阶段；
+- 微信页面或接口变化可能影响抓取，需要通过 Issue 跟进适配；
+- Whisper 原始逐字稿可能出现同音误识，因此始终保留 MP4 和任务清单作为原始依据。
+
+## 欢迎参与
+
+欢迎在 [Issues](https://github.com/Zhenxiangai/wechat-archive/issues) 提交真实使用反馈、失效样本、文档改进或平台适配建议。请勿上传 Cookie、证书、账号信息、真实 MP4/TXT 或包含个人路径的 manifest。
+
+如果你暂时不写代码，也可以：
+
+- 用一个公开分享链接跑通流程并反馈结果；
+- 改进中文或英文说明；
+- 把项目分享给需要视频号归档、内容研究或本地知识库的朋友；
+- 点一个 [Star](https://github.com/Zhenxiangai/wechat-archive) 关注后续版本。
+
 ## 许可证与第三方组件
 
 本仓库原创文件使用 [MIT License](./LICENSE)。下载或调用的第三方组件继续遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
@@ -151,7 +203,7 @@ sh ./scripts/bootstrap.sh disable-capture
 
 <div align="center">
 
-如果你希望朋友在新电脑上部署，发给他仓库首页即可：
+一个链接完成分享、安装和后续更新：
 
 <https://github.com/Zhenxiangai/wechat-archive>
 

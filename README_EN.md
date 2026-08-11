@@ -2,13 +2,26 @@
 
 [简体中文](./README.md) · **English**
 
+# WeChat Channels Archiver & Auto Transcriber
+
+**Share-link download · Creator-history batch archive · MP4 → raw TXT · One-link Hermes deployment**
+
+A local-first macOS CLI and Hermes Skill that turns a WeChat Channels link or creator name into an organized local archive: MP4, same-name raw transcript, and a traceable manifest.
+
+![Local archive flow from a shared link to video, transcript, and manifest](./docs/assets/hero-zh.png)
+
+[![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#requirements)
+[![Hermes Skill](https://img.shields.io/badge/Hermes-Skill-0ea5e9)](./SKILL.md)
+[![Local first](https://img.shields.io/badge/Data-Local--first-10b981)](#data-layout)
+[![Release](https://img.shields.io/badge/release-v0.6.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/releases/tag/v0.6.0)
+[![MIT License](https://img.shields.io/badge/license-MIT-f59e0b)](./LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/Zhenxiangai/wechat-archive?style=social)](https://github.com/Zhenxiangai/wechat-archive/stargazers)
+
+If this project solves a real archiving problem for you, a **Star** helps more local-first users discover it.
+
 </div>
 
-# WeChat Archive Hermes Skill
-
-A local-first macOS CLI and Hermes Skill for archiving public WeChat articles, downloading WeChat Channels links or visible author history, and generating raw same-name TXT transcripts beside completed MP4 files.
-
-## Give one link to Hermes
+## Start in 30 seconds
 
 Send this repository URL to Hermes and say “部署这个开源项目”:
 
@@ -24,9 +37,38 @@ https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v0.6.0/SKILL.md
 
 Hermes installs the Skill, dependencies, model, user-level workers, and the verified Channels backend. The computer owner only approves clearly described changes, allows macOS dialogs, and logs in to WeChat personally. They do not use Terminal, developer tools, or copy a Cookie.
 
-## Release boundary
+After setup, talk to Hermes naturally:
 
-Publish this directory only. Do not publish the parent workspace, `~/Documents/WeChatArchive`, job manifests, MP4/TXT outputs, Cookies, certificates, proxy settings, browser profiles, or account configuration.
+```text
+Download this WeChat Channels link: https://weixin.qq.com/sph/...
+Search for the creator "Creator Name" and show me same-name candidates.
+Archive every currently visible post from this creator.
+Show download and transcription progress for job_id channel-...
+```
+
+## Who is it for?
+
+- **Creators and social teams** preserving public video material and extracting raw spoken copy;
+- **Researchers and knowledge-base builders** turning scattered Channels content into searchable local files;
+- **Archive operators** who need creator-wide pagination, batch jobs, and explicit progress;
+- **AI-agent users** who want Hermes to deploy and operate the workflow while humans handle only approvals and login.
+
+## More than a download script
+
+| Need | What this project does |
+|---|---|
+| You only have a share link | Resolves it, creates a download job, and returns a traceable `job_id` |
+| You only remember a creator name | Returns same-name candidates, then paginates every currently visible post |
+| You want a creator-wide archive | Creates batch tasks and reports completed, paused, and failed items |
+| You still need a transcript | Generates a same-directory, same-name raw TXT after each MP4 completes |
+| Your archive keeps growing | Writes a `manifest.json` for source, artifacts, and progress |
+| A new Mac needs setup | Hermes explains and performs deployment in separately approved stages |
+
+Public WeChat Official Account article archiving is included as well.
+
+## Trust and privacy boundary
+
+This repository contains source code and documentation only. It does not publish the parent workspace, local archives, job manifests, MP4/TXT outputs, Cookies, certificates, proxy settings, browser profiles, or account configuration.
 
 This package contains no downloader binary, FFmpeg binary, Whisper binary, model weights, login state, certificate, or Cookie. Its bootstrap downloads fixed verified artifacts and keeps certificate/proxy activation behind a separate approval step.
 
@@ -53,6 +95,17 @@ sh ./scripts/bootstrap.sh enable-capture
 ```
 
 Hermes first explains the local CA and system-proxy change, requests approval, helps the user click macOS permission dialogs, then opens WeChat for the user to log in and enter 视频号. The default single-link path does not use a browser Cookie. `disable-capture` stops interception and restores the saved HTTP/HTTPS proxy settings.
+
+## Verified on a real archive run
+
+| Check | Result |
+|---|---:|
+| Creator-history pagination | 14 pages, 203 items discovered and queued |
+| Completed sample archive | 22 MP4 files |
+| Unattended same-directory transcripts | 22 TXT files |
+| Final transcription state | `pending=0`, `failed=0` |
+
+These numbers document one real acceptance run. They prove the workflow, not a guaranteed item count for every account.
 
 ## Unattended raw transcription
 
@@ -109,6 +162,8 @@ video title.txt
 
 TXT is the raw source-language speech transcript. It is not polished, summarized, or translated.
 
+That is intentional: the raw transcript stays as the stable source. Summaries, translations, or polished copy should be separate derived files.
+
 ## Hermes
 
 Official repository: <https://github.com/Zhenxiangai/wechat-archive>
@@ -143,6 +198,29 @@ Hermes can then archive explicit URLs, search or download Channels authors, insp
     └── <title>.txt
 ```
 
+## Requirements
+
+- Apple Silicon Mac;
+- Hermes;
+- Python 3.11 or newer;
+- internet access during setup;
+- the computer owner logs in to WeChat for Channels capture.
+
+## Known limits
+
+- Automated onboarding has currently been verified only on Apple Silicon Macs.
+- Channels capture requires a logged-in WeChat client and a separately approved local capture stage.
+- WeChat page or API changes may require adapter updates.
+- Whisper can misrecognize words, so the MP4 and manifest remain the source of truth.
+
+## Contributing
+
+[Issues](https://github.com/Zhenxiangai/wechat-archive/issues) are welcome for real-world results, broken public samples, documentation improvements, and platform-adaptation ideas. Never upload Cookies, certificates, account data, real MP4/TXT archives, or manifests containing personal paths.
+
+You can also help without writing code: verify one public link, improve a translation, share the project with an archive or research community, or [Star the repository](https://github.com/Zhenxiangai/wechat-archive).
+
 ## Licensing
 
 The original files are released under the MIT License. Read `LICENSE` and `THIRD_PARTY_NOTICES.md`; downloaded third-party components retain their own terms.
+
+This is not an official WeChat or Hermes project and contains neither product's trademarks, client software, or account data.
