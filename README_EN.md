@@ -87,7 +87,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.2/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.3/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -104,6 +104,8 @@ Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and 
 The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-text and video, Douyin video, and WeChat Channels 1080p video. Every verified video package contains one formal video and three Chinese-named transcript files. The Xiaohongshu image-text package contains `正文.md` and four valid images. Every formal artifact matches the byte count and SHA-256 recorded in its manifest.
 
 `v1.0.1` closed the Hermes URL-install gap. `v1.0.2` changes only the public brand and repository address and makes pinned-core extraction independent of the repository directory name. The internal Skill ID, local data, and four-platform capability boundary remain unchanged.
+
+`v1.0.3` improves Channels authorization recovery and supports task-only in-memory routing when Clash Verge Rev/Mihomo is already active: it does not disable or replace the system proxy, does not write the user's persistent configuration, and restores the original runtime afterward.
 
 ## Runtime boundary
 
