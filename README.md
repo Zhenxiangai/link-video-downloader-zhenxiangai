@@ -26,10 +26,10 @@
 
 | 平台 | 单链接 | 历史批量 | 正式内容包 |
 |---|---|---|---|
-| 微信视频号 | 视频 | 保留已有博主搜索与当前可见历史 | `video.mp4` + 三种原始逐字稿 |
-| B站 | 视频 | 后续版本 | `video.mp4` + 三种原始逐字稿 |
+| 微信视频号 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
+| B站 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
 | 小红书 | 图文或视频 | 后续版本 | `正文.md` + `配图/`，或视频与逐字稿 |
-| 抖音 | 视频 | 后续版本 | `video.mp4` + 三种原始逐字稿 |
+| 抖音 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
 
 视频正式目录只保留一个 `video.mp4`。`原始逐字稿.txt` 从 JSON 分段机械生成，按时间由上到下排列；SRT 和 JSON 同时保留。项目不自动润色、纠错、总结或翻译原始逐字稿。
 
@@ -49,9 +49,9 @@ PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
 "$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
-`extract` 立即返回一个 `content-*` 和相对 manifest 路径，下载、归档和转写由 content worker 顺序完成。
+`extract` 立即返回一个 `content-*` 和相对 manifest 路径，下载、归档和转写由 content worker 顺序完成。视频号在用户完成一次无人值守授权后，每次任务自动临时启用兼容路由并恢复原代理。
 
-原有 `download-channel-url` 保留为统一入口别名；视频号作者搜索/历史批量和手动转写命令继续可用。详细路由见 [SKILL.md](./SKILL.md)。
+单个视频号链接由 `download-channel-url` 自动打开微信并提交。视频号、B站和抖音的作者批量统一为两步：先盘点总数并冻结作品清单，向用户询问下载数量，收到回复后才使用同一父 Job 提交子任务。详细路由见 [SKILL.md](./SKILL.md)。
 
 ## 内容包
 
@@ -87,7 +87,7 @@ sh ./scripts/bootstrap.sh status
 新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.3/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.1.0/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 旧 `article-*`、`batch-*`、`channel-*`、`media-*`、`video_channels/` 和 manifest 原地保留；项目不增加迁移器、自动更新器或回滚管理器。
@@ -106,6 +106,10 @@ hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-
 `v1.0.1` 已补齐 Hermes 直链首次安装闭环。`v1.0.2` 只迁移公开品牌和仓库地址，并让固定核心解压不依赖仓库目录名；内部 Skill ID、本地数据和四平台功能边界保持不变。
 
 `v1.0.3` 改进视频号授权恢复，并支持 Clash Verge Rev/Mihomo 已启用时的任务级内存路由：不关闭、不替换系统代理，不写入用户持久配置，任务结束后恢复原运行态。
+
+`v1.1.0` 新增视频号、B站和抖音作者历史批量：先盘点当前可见总数且不下载，再按用户确认数量从最新开始抓取、转写。真实小批量验收覆盖视频号 280 个可选、B站 913 个可选及抖音作者列表，三个平台各完成 2 条视频与三种逐字稿，24 个正式产物均与 manifest 的字节数和 SHA-256 一致。
+
+后续版本计划增加小红书作者批量和公众号文章抓取；当前版本不承诺这两项历史批量能力。
 
 ## 运行边界
 
