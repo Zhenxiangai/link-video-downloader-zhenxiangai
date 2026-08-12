@@ -21,6 +21,8 @@ backend_runtime="$backend_root/runtime"
 backend_label="com.wechatarchive.channels"
 backend_plist="$HOME/Library/LaunchAgents/$backend_label.plist"
 proxy_snapshot="$backend_runtime/proxy-before-capture.env"
+unattended_marker="$backend_runtime/unattended-authorized.env"
+unattended_cert_name="wechat_archive_$(id -u)_unattended"
 clash_socket="/tmp/verge/verge-mihomo.sock"
 clash_config="$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml"
 clash_capture_proxy="wechat_archive_capture"
@@ -533,10 +535,50 @@ PY
 }
 
 remove_capture_certificate() {
+    [ "$(snapshot_value persistent_certificate)" != "true" ] || return 0
     cert_name=$(snapshot_value cert_name)
     [ -n "$cert_name" ] || return 0
     installed=$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)
     [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
+}
+
+unattended_ready() {
+    [ -f "$unattended_marker" ] || return 1
+    cert_name=$(sed -n 's/^cert_name=//p' "$unattended_marker" | head -n 1)
+    [ "$cert_name" = "$unattended_cert_name" ] || return 1
+    [ -f "$backend_runtime/certs/$cert_name.pem" ] || return 1
+    [ -f "$backend_runtime/certs/$cert_name.key" ] || return 1
+    [ -n "$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)" ]
+}
+
+authorize_unattended() {
+    check_platform
+    api_get /api/status >/dev/null || fail "channels_backend_unavailable"
+    if unattended_ready; then
+        echo "unattended_authorization=ready"
+        echo "reused=true"
+        return
+    fi
+    [ ! -f "$unattended_marker" ] || fail "unattended_authorization_incomplete: run revoke-unattended and authorize-unattended again"
+    [ -z "$(security find-certificate -a -c "$unattended_cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)" ] || fail "unattended_certificate_name_conflict"
+    api_post /api/proxy/certificate/generate "{\"name\":\"$unattended_cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
+    cert_file="$backend_runtime/certs/$unattended_cert_name.pem"
+    [ -f "$cert_file" ] || fail "generated_certificate_not_found"
+    security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
+    umask 077
+    printf 'cert_name=%s\n' "$unattended_cert_name" >"$unattended_marker"
+    unattended_ready || fail "unattended_authorization_incomplete"
+    echo "unattended_authorization=ready"
+    echo "next_action=future Channels links can use automatic task-local capture"
+}
+
+revoke_unattended() {
+    [ ! -f "$proxy_snapshot" ] || fail "capture_transaction_active: run disable-capture first"
+    cert_name="$unattended_cert_name"
+    installed=$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)
+    [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
+    rm -f "$backend_runtime/certs/$cert_name.pem" "$backend_runtime/certs/$cert_name.key" "$unattended_marker"
+    echo "unattended_authorization=revoked"
 }
 
 capture_status() {
@@ -591,17 +633,23 @@ enable_capture() {
         case "$mode" in global|rule|direct) ;; *) fail "unsupported_mihomo_mode: $mode" ;; esac
         echo "mihomo_mode=$mode" >>"$proxy_snapshot"
     fi
-    cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
-    api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
-    cert_file="$backend_runtime/certs/$cert_name.pem"
-    [ -f "$cert_file" ] || fail "generated_certificate_not_found"
+    if unattended_ready; then
+        cert_name="$unattended_cert_name"
+        cert_file="$backend_runtime/certs/$cert_name.pem"
+        echo "persistent_certificate=true" >>"$proxy_snapshot"
+    else
+        cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
+        api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
+        cert_file="$backend_runtime/certs/$cert_name.pem"
+        [ -f "$cert_file" ] || fail "generated_certificate_not_found"
+        security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
+    fi
     echo "cert_name=$cert_name" >>"$proxy_snapshot"
-    security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
-    proxy_json=$("$python_bin" - "$service" "$capture_route" <<'PY'
+    proxy_json=$("$python_bin" - "$service" "$capture_route" "$cert_name" "$cert_file" "$backend_runtime/certs/$cert_name.key" <<'PY'
 import json
 import sys
 
-service, route = sys.argv[1:]
+service, route, cert_name, cert_file, cert_key = sys.argv[1:]
 print(json.dumps({"values": {
     "proxy.enabled": True,
     "proxy.system": route == "system",
@@ -610,6 +658,9 @@ print(json.dumps({"values": {
     "proxy.port": 2023,
     "proxy.skipInstallRootCert": True,
     "proxy.upstreamProxy": "",
+    "cert.name": cert_name,
+    "cert.file": cert_file,
+    "cert.key": cert_key,
 }, "restart": True}))
 PY
 )
@@ -678,11 +729,73 @@ disable_capture() {
     else
         echo "previous_proxy=unchanged"
     fi
-    echo "capture_certificate=removed"
+    if unattended_ready; then
+        echo "capture_certificate=retained"
+    else
+        echo "capture_certificate=removed"
+    fi
+}
+
+capture_python() {
+    if [ -f "$proxy_snapshot" ]; then
+        capture_status | grep -q '^capture_proxy=stopped$' || fail "capture_transaction_already_active"
+        disable_capture >&2
+    fi
+    enable_capture >&2
+    trap 'disable_capture >/dev/null 2>&1 || true' EXIT HUP INT TERM
+    if result=$(WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" "$@"); then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    if disable_capture >&2; then
+        cleanup_status=0
+    else
+        cleanup_status=$?
+    fi
+    trap - EXIT HUP INT TERM
+    printf '%s\n' "$result"
+    [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
+    [ "$command_status" -eq 0 ] || return "$command_status"
+}
+
+inspect_channel_author() {
+    [ -n "${1:-}" ] || fail "missing Channels share URL"
+    capture_python inspect-channel-author --author "$1"
+}
+
+download_channel_plan() {
+    [ -n "${1:-}" ] || fail "missing batch Job ID"
+    [ -n "${2:-}" ] || fail "missing download count"
+    capture_python download-channel-plan --job-id "$1" --limit "$2"
+}
+
+inspect_creator() {
+    [ -n "${1:-}" ] || fail "missing creator share URL"
+    case "$1" in
+        https://weixin.qq.com/*|https://channels.weixin.qq.com/*) capture_python inspect-creator --url "$1" ;;
+        *) WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" inspect-creator --url "$1" ;;
+    esac
+}
+
+download_creator_plan() {
+    [ -n "${1:-}" ] || fail "missing batch Job ID"
+    [ -n "${2:-}" ] || fail "missing download count"
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-creator-plan --job-id "$1" --limit "$2"
+}
+
+download_channel_url() {
+    [ -n "${1:-}" ] || fail "missing Channels share URL"
+    capture_python download-channel-url --url "$1"
 }
 
 status() {
     doctor
+    if unattended_ready; then
+        echo "unattended_authorization=ready"
+    else
+        echo "unattended_authorization=missing"
+    fi
     if api_get /api/status >/dev/null 2>&1; then
         api_get /api/status | "$python_bin" -c 'import json,sys; d=json.load(sys.stdin).get("data") or {}; print("channels_api=" + str((d.get("api") or {}).get("status") or "stopped"))'
         capture_status || {
@@ -720,8 +833,15 @@ case "${1:-}" in
     status) status ;;
     enable-capture) enable_capture ;;
     disable-capture) disable_capture ;;
+    authorize-unattended) authorize_unattended ;;
+    revoke-unattended) revoke_unattended ;;
+    download-channel-url) download_channel_url "${2:-}" ;;
+    inspect-channel-author) inspect_channel_author "${2:-}" ;;
+    download-channel-plan) download_channel_plan "${2:-}" "${3:-}" ;;
+    inspect-creator) inspect_creator "${2:-}" ;;
+    download-creator-plan) download_creator_plan "${2:-}" "${3:-}" ;;
     *)
-        echo "usage: $0 {doctor|install|status|enable-capture|disable-capture}" >&2
+        echo "usage: $0 {doctor|install|status|authorize-unattended|revoke-unattended|enable-capture|disable-capture|download-channel-url <share-url>|inspect-channel-author <share-url>|download-channel-plan <job-id> <count>|inspect-creator <share-url>|download-creator-plan <job-id> <count>}" >&2
         exit 64
         ;;
 esac

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import http.cookiejar
 import ipaddress
 import json
 import mimetypes
@@ -13,6 +14,7 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -22,12 +24,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
 
-VERSION = "1.0.3"
+VERSION = "1.1.0"
 TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
 TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"
@@ -581,6 +583,8 @@ def submit_content(url: str, root: Path) -> dict:
             "output_dir": None,
         }
     )
+    if platform == "wechat_channels":
+        manifest["auto_resume"] = True
     manifest_path = job_dir / "manifest.json"
     write_json(manifest_path, manifest)
     return {
@@ -757,6 +761,19 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
 def content_worker_once(root: Path) -> tuple[dict, bool]:
     jobs_root = root / "jobs"
     jobs_root.mkdir(parents=True, exist_ok=True)
+    progress_channel_jobs_once(root)
+    for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("kind") == "creator_batch" and manifest.get("status") in {
+            "submitting",
+            "processing",
+            "waiting_for_authorization",
+            "waiting_for_reauthentication",
+        }:
+            if manifest.get("status") == "submitting":
+                submit_creator_batch_children(manifest, manifest_path, root)
+            else:
+                refresh_creator_batch(manifest, manifest_path, root)
     processed = False
     for manifest_path in sorted(jobs_root.glob("content-????????T??????Z-????????/manifest.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -774,7 +791,7 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
         }
         for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("status") in active_batch_states:
+            if manifest.get("kind") == "batch" and manifest.get("status") in active_batch_states:
                 process_official_batch(manifest_path, root)
                 processed = True
                 break
@@ -902,6 +919,12 @@ def import_browser_cookies(platform: str, browser: str, root: Path) -> dict:
             manifest.pop("error", None)
             write_json(manifest_path, manifest)
             resumed += 1
+    for manifest_path in (root / "jobs").glob("batch-????????T??????Z-????????/manifest.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("kind") == "creator_batch" and manifest.get("platform") == platform and manifest.get("status") == "waiting_for_reauthentication":
+            manifest.update({"status": "processing", "updated_at": utc_now()})
+            manifest.pop("next_action", None)
+            write_json(manifest_path, manifest)
     return {"ok": True, "platform": platform, "browser": browser, "status": "imported", "cookie_count": len(filtered), "resumed_jobs": resumed}
 
 
@@ -920,7 +943,8 @@ def resume_job(job_id: str, root: Path) -> dict:
     manifest.pop("next_action", None)
     manifest.pop("error", None)
     write_json(manifest_path, manifest)
-    return {"ok": True, "job_id": job_id, "status": "queued", "platform": manifest.get("platform")}
+    manifest = process_content_job(manifest_path, root)
+    return {"ok": manifest.get("status") != "failed", "job_id": job_id, "status": manifest["status"], "platform": manifest.get("platform")}
 
 
 def resolve_transparent_core_url(url: str, platform: str) -> str:
@@ -933,8 +957,25 @@ def resolve_transparent_core_url(url: str, platform: str) -> str:
         exact_hosts, suffixes = {"v.douyin.com", "douyin.com"}, (".douyin.com", ".iesdouyin.com")
     else:
         return url
-    _, _, final_url = fetch_limited(url, exact_hosts=exact_hosts, suffixes=suffixes, max_bytes=8 * 1024 * 1024)
-    return final_url
+    try:
+        _, _, final_url = fetch_limited(url, exact_hosts=exact_hosts, suffixes=suffixes, max_bytes=8 * 1024 * 1024)
+        return final_url
+    except ArchiveError:
+        if platform != "bilibili":
+            raise
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with build_opener(SafeRedirectHandler(exact_hosts, suffixes)).open(request, timeout=25) as response:
+                return response.geturl()
+        except HTTPError as exc:
+            final_url = exc.geturl()
+            parsed = _split_url(final_url)
+            host = (parsed.hostname or "").lower()
+            if host_allowed(host, exact_hosts, suffixes) and re.search(r"/video/BV[0-9A-Za-z]{10}", parsed.path):
+                return final_url
+            raise ArchiveError("fetch_failed", f"下载失败：{exc}", 69) from exc
+        except (URLError, TimeoutError, ValueError) as exc:
+            raise ArchiveError("fetch_failed", f"下载失败：{exc}", 69) from exc
 
 
 def download_with_transparent_core(url: str, platform: str, work_dir: Path) -> tuple[dict, Path]:
@@ -1134,15 +1175,19 @@ def process_transparent_video(manifest: dict, manifest_path: Path, root: Path) -
         info, source_video = download_with_transparent_core(str(manifest["source"]), platform, work_dir)
         route = "transparent_core"
     except ArchiveError as exc:
-        if platform != "bilibili" or exc.code not in {"transparent_core_failed", "reauthentication_required", "video_missing"}:
+        if platform == "douyin" and manifest.get("douyin_media"):
+            info, source_video = download_douyin_inventory_fallback(manifest, work_dir)
+            route = "douyin_inventory_media"
+        elif platform != "bilibili" or exc.code not in {"transparent_core_failed", "reauthentication_required", "video_missing"}:
             raise
-        try:
-            info, source_video = download_bilibili_fallback(str(manifest["source"]), work_dir)
-        except ArchiveError:
-            if exc.code == "reauthentication_required":
-                raise exc
-            raise
-        route = "bilibili_api_cdn"
+        else:
+            try:
+                info, source_video = download_bilibili_fallback(str(manifest["source"]), work_dir)
+            except ArchiveError:
+                if exc.code == "reauthentication_required":
+                    raise exc
+                raise
+            route = "bilibili_api_cdn"
     return finalize_video_content(manifest, manifest_path, root, info, source_video, route)
 
 
@@ -1248,6 +1293,287 @@ def bilibili_json(path: str, query: dict) -> dict:
     return payload.get("data") or {}
 
 
+def bilibili_creator_inventory(url: str) -> tuple[dict, list[dict]]:
+    resolved = resolve_transparent_core_url(url, "bilibili")
+    match = re.search(r"BV[0-9A-Za-z]{10}", resolved)
+    if not match:
+        raise ArchiveError("bilibili_id_missing", "B站链接没有解析出作品标识。", 69)
+    view = bilibili_json("/x/web-interface/view", {"bvid": match.group(0)})
+    owner = view.get("owner") or {}
+    creator_id = str(owner.get("mid") or "")
+    if not creator_id:
+        raise ArchiveError("bilibili_creator_missing", "B站作品没有返回 UP 主标识。", 69)
+
+    core = transparent_core_root()
+    sys.path.insert(0, str(core))
+    try:
+        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+        from yt_dlp.utils import DownloadError  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ArchiveError("transparent_core_invalid", "透明派生核心无法加载。", 69) from exc
+    options = {"cachedir": False, "extract_flat": True, "quiet": True, "no_warnings": True, "logger": SilentCookieLogger()}
+    cookie_jar = platform_cookie_jar("bilibili")
+    if cookie_jar.is_file():
+        options["cookiefile"] = str(cookie_jar)
+    try:
+        with YoutubeDL(options) as downloader:
+            playlist = downloader.extract_info(f"https://space.bilibili.com/{creator_id}/video", download=False)
+    except DownloadError as exc:
+        message = str(exc).lower()
+        if "412" in message or "blocked" in message or "rejected" in message:
+            raise ArchiveError("bilibili_rate_limited", "B站作者列表触发风控，请稍后导入持久 B 站 Cookie 再继续。", 69) from exc
+        if transparent_core_needs_login(exc):
+            raise ArchiveError("reauthentication_required", "B站登录态缺失或已失效。", 69) from exc
+        raise ArchiveError("transparent_core_failed", "B站作者列表解析失败。", 69) from exc
+
+    items = []
+    for entry in playlist.get("entries") or []:
+        content_id = str(entry.get("id") or "")
+        if not re.fullmatch(r"BV[0-9A-Za-z]{10}", content_id):
+            continue
+        items.append(
+            {
+                "id": content_id,
+                "url": f"https://www.bilibili.com/video/{content_id}/",
+                "title": str(entry.get("title") or "未命名视频"),
+                "published_at": entry.get("timestamp") or entry.get("release_timestamp"),
+                "child_job_id": None,
+            }
+        )
+    return {
+        "id": creator_id,
+        "name": str(owner.get("name") or ""),
+        "url": f"https://space.bilibili.com/{creator_id}/video",
+    }, items
+
+
+def douyin_creator_inventory(url: str) -> tuple[dict, list[dict]]:
+    resolved = resolve_transparent_core_url(url, "douyin")
+    info = inspect_with_transparent_core(resolved, "douyin")
+    creator_id = str(info.get("channel_id") or "")
+    if not creator_id:
+        raise ArchiveError("douyin_creator_missing", "抖音作品没有返回作者标识。", 69)
+    cookie_path = platform_cookie_jar("douyin")
+    if not cookie_path.is_file():
+        raise ArchiveError("reauthentication_required", "请先导入持久抖音 Cookie。", 69)
+    jar = http.cookiejar.MozillaCookieJar(str(cookie_path))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except (OSError, http.cookiejar.LoadError) as exc:
+        raise ArchiveError("reauthentication_required", "抖音 Cookie 无法读取，请重新导入。", 69) from exc
+    opener = build_opener(HTTPCookieProcessor(jar))
+    items = []
+    cursor = 0
+    seen_cursors = set()
+    seen_ids = set()
+    while True:
+        query = {
+            "device_platform": "webapp",
+            "aid": "6383",
+            "channel": "channel_pc_web",
+            "sec_user_id": creator_id,
+            "max_cursor": cursor,
+            "count": 18,
+            "publish_video_strategy_type": 2,
+            "locate_query": "false",
+            "pc_client_type": 1,
+            "version_code": "170400",
+            "version_name": "17.4.0",
+            "cookie_enabled": "true",
+            "browser_language": "zh-CN",
+            "browser_platform": "MacIntel",
+            "browser_name": "Chrome",
+            "platform": "PC",
+        }
+        request = Request(
+            "https://www.douyin.com/aweme/v1/web/aweme/post/?" + urlencode(query),
+            headers={"User-Agent": "Mozilla/5.0", "Referer": f"https://www.douyin.com/user/{creator_id}", "Accept": "application/json"},
+        )
+        try:
+            with opener.open(request, timeout=30) as response:
+                payload = json.loads(response.read(4 * 1024 * 1024))
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise ArchiveError("douyin_creator_failed", "抖音作者作品列表读取失败。", 69) from exc
+        if payload.get("status_code") != 0:
+            raise ArchiveError("reauthentication_required", "抖音登录态已失效或触发平台验证。", 69)
+        for aweme in payload.get("aweme_list") or []:
+            content_id = str(aweme.get("aweme_id") or "")
+            video = aweme.get("video") or {}
+            media_urls = (video.get("play_addr") or {}).get("url_list") or []
+            ordinary_video = aweme.get("aweme_type") == 0 and not (aweme.get("images") or []) and media_urls
+            if ordinary_video and content_id and content_id not in seen_ids:
+                seen_ids.add(content_id)
+                items.append(
+                    {
+                        "id": content_id,
+                        "url": f"https://www.douyin.com/video/{content_id}",
+                        "title": str((aweme.get("desc") or "未命名视频")).strip(),
+                        "published_at": aweme.get("create_time"),
+                        "child_job_id": None,
+                    }
+                )
+        if not payload.get("has_more"):
+            break
+        next_cursor = int(payload.get("max_cursor") or 0)
+        if not next_cursor or next_cursor == cursor or next_cursor in seen_cursors:
+            raise ArchiveError("douyin_cursor_invalid", "抖音作者分页游标没有前进。", 69)
+        seen_cursors.add(cursor)
+        cursor = next_cursor
+    items.sort(key=lambda item: int(item.get("published_at") or 0), reverse=True)
+    return {
+        "id": creator_id,
+        "name": str(info.get("channel") or info.get("uploader") or ""),
+        "url": f"https://www.douyin.com/user/{creator_id}",
+    }, items
+
+
+def inspect_creator(url: str, root: Path) -> dict:
+    normalized, platform = submission_url(url)
+    if platform == "wechat_channels":
+        return inspect_channel_creator(normalized, root)
+    if platform == "bilibili":
+        creator, items = bilibili_creator_inventory(normalized)
+    elif platform == "douyin":
+        creator, items = douyin_creator_inventory(normalized)
+    else:
+        raise ArchiveError("creator_batch_unsupported", "作者历史批量当前只支持视频号、B站和抖音。")
+    if not items:
+        raise ArchiveError("creator_inventory_empty", "该作者当前没有可下载视频。", 66)
+    job_id, job_dir, manifest = new_job(root, "batch", canonical_url(normalized))
+    manifest.update(
+        {
+            "kind": "creator_batch",
+            "status": "awaiting_download_count",
+            "updated_at": utc_now(),
+            "platform": platform,
+            "creator": creator,
+            "inventory": {"captured_at": utc_now(), "available": len(items), "items": items},
+            "selection": None,
+            "child_job_ids": [],
+            "counts": {"selected": 0, "processing": 0, "completed": 0, "failed": 0},
+            "next_action": f"该博主当前可下载视频共 {len(items)} 个，默认从最新开始。你要下载多少个？",
+        }
+    )
+    write_json(job_dir / "manifest.json", manifest)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": manifest["status"],
+        "platform": platform,
+        "creator": creator,
+        "available": len(items),
+        "question": manifest["next_action"],
+        "manifest": archive_relative(root, job_dir / "manifest.json"),
+    }
+
+
+def refresh_creator_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    processing = completed = failed = waiting_authorization = waiting_reauthentication = 0
+    for item in (manifest.get("inventory") or {}).get("items") or []:
+        child_id = item.get("child_job_id")
+        if not child_id:
+            continue
+        child_path = root / "jobs" / str(child_id) / "manifest.json"
+        if not child_path.is_file():
+            processing += 1
+            continue
+        child = json.loads(child_path.read_text(encoding="utf-8"))
+        if child.get("status") == "completed":
+            item["result"] = "completed"
+            completed += 1
+        elif child.get("status") == "failed":
+            item["result"] = "failed"
+            item["error_code"] = (child.get("error") or {}).get("code")
+            failed += 1
+        elif child.get("status") == "waiting_for_authorization":
+            item["result"] = "waiting_for_authorization"
+            waiting_authorization += 1
+        elif child.get("status") == "waiting_for_reauthentication":
+            item["result"] = "waiting_for_reauthentication"
+            waiting_reauthentication += 1
+        else:
+            item["result"] = "processing"
+            processing += 1
+    selected = int((manifest.get("selection") or {}).get("limit") or 0)
+    manifest["counts"] = {
+        "selected": selected,
+        "processing": processing,
+        "waiting_for_authorization": waiting_authorization,
+        "waiting_for_reauthentication": waiting_reauthentication,
+        "completed": completed,
+        "failed": failed,
+    }
+    if waiting_reauthentication:
+        manifest["status"] = "waiting_for_reauthentication"
+    elif waiting_authorization:
+        manifest["status"] = "waiting_for_authorization"
+    elif selected and not processing:
+        manifest.update({"status": "completed_with_failures" if failed else "completed", "completed_at": utc_now()})
+    elif selected:
+        manifest["status"] = "processing"
+    manifest["updated_at"] = utc_now()
+    write_json(manifest_path, manifest)
+    return manifest
+
+
+def submit_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    limit = int((manifest.get("selection") or {}).get("limit") or 0)
+    items = (manifest.get("inventory") or {}).get("items") or []
+    for item in items[:limit]:
+        if item.get("child_job_id"):
+            continue
+        child = submit_content(str(item["url"]), root)
+        child_path = root / str(child["manifest"])
+        child_manifest = json.loads(child_path.read_text(encoding="utf-8"))
+        if manifest.get("platform") == "wechat_channels":
+            obj = item.get("payload") or {}
+            child_manifest.update(
+                {
+                    "status": "downloading",
+                    "title": item["title"],
+                    "content_id": item["id"],
+                    "route": "wechat_channels_backend",
+                    "channel_object": obj,
+                }
+            )
+            write_json(child_path, child_manifest)
+        elif manifest.get("platform") == "douyin":
+            child_manifest["douyin_media"] = {"content_id": item["id"]}
+            write_json(child_path, child_manifest)
+        item.update({"child_job_id": child["job_id"], "result": "processing"})
+        manifest["child_job_ids"].append(child["job_id"])
+        manifest.update({"status": "submitting", "updated_at": utc_now()})
+        write_json(manifest_path, manifest)
+    return refresh_creator_batch(manifest, manifest_path, root)
+
+
+def download_creator_plan(job_id: str, limit: int, root: Path) -> dict:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise ArchiveError("invalid_job_id", "Job ID 格式错误。")
+    manifest_path = root / "jobs" / job_id / "manifest.json"
+    if not manifest_path.is_file():
+        raise ArchiveError("job_not_found", "没有找到该任务。", 66)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != "creator_batch" or manifest.get("status") != "awaiting_download_count":
+        raise ArchiveError("job_not_waiting_for_count", "该任务当前不在等待下载数量。", 66)
+    items = (manifest.get("inventory") or {}).get("items") or []
+    if limit < 1 or limit > len(items):
+        raise ArchiveError("invalid_download_count", f"下载数量应在 1 到 {len(items)} 之间。")
+    manifest.update({"status": "submitting", "updated_at": utc_now(), "selection": {"limit": limit, "order": "newest"}})
+    manifest.pop("next_action", None)
+    write_json(manifest_path, manifest)
+    manifest = submit_creator_batch_children(manifest, manifest_path, root)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": manifest["status"],
+        "platform": manifest["platform"],
+        "counts": manifest["counts"],
+        "child_job_ids": manifest["child_job_ids"],
+        "manifest": archive_relative(root, manifest_path),
+    }
+
+
 def download_bilibili_fallback(url: str, work_dir: Path) -> tuple[dict, Path]:
     page, _, final_url = fetch_limited(
         url,
@@ -1293,6 +1619,62 @@ def download_bilibili_fallback(url: str, work_dir: Path) -> tuple[dict, Path]:
         "page_number": page_number,
         "title": title,
         "webpage_url": f"https://www.bilibili.com/video/{bvid}/?p={page_number}",
+    }, target
+
+
+def download_douyin_inventory_fallback(manifest: dict, work_dir: Path) -> tuple[dict, Path]:
+    content_id = str((manifest.get("douyin_media") or {}).get("content_id") or manifest.get("content_id") or "")
+    cookie_path = platform_cookie_jar("douyin")
+    if not cookie_path.is_file():
+        raise ArchiveError("reauthentication_required", "请先导入持久抖音 Cookie。", 69)
+    jar = http.cookiejar.MozillaCookieJar(str(cookie_path))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except (OSError, http.cookiejar.LoadError) as exc:
+        raise ArchiveError("reauthentication_required", "抖音 Cookie 无法读取，请重新导入。", 69) from exc
+    query = {
+        "device_platform": "webapp",
+        "aid": "6383",
+        "channel": "channel_pc_web",
+        "aweme_id": content_id,
+        "pc_client_type": 1,
+        "version_code": "170400",
+        "version_name": "17.4.0",
+        "cookie_enabled": "true",
+        "browser_language": "zh-CN",
+        "browser_platform": "MacIntel",
+        "browser_name": "Chrome",
+        "platform": "PC",
+    }
+    request = Request(
+        "https://www.douyin.com/aweme/v1/web/aweme/detail/?" + urlencode(query),
+        headers={"User-Agent": "Mozilla/5.0", "Referer": str(manifest["source"]), "Accept": "application/json"},
+    )
+    try:
+        with build_opener(HTTPCookieProcessor(jar)).open(request, timeout=30) as response:
+            payload = json.loads(response.read(4 * 1024 * 1024))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise ArchiveError("douyin_media_failed", "抖音视频地址读取失败。", 69) from exc
+    detail = payload.get("aweme_detail") or {}
+    media_urls = ((detail.get("video") or {}).get("play_addr") or {}).get("url_list") or []
+    if payload.get("status_code") != 0 or str(detail.get("aweme_id") or "") != content_id or not media_urls:
+        raise ArchiveError("reauthentication_required", "抖音登录态已失效或触发平台验证。", 69)
+    target = work_dir / "source.mp4"
+    last_error = None
+    for candidate in media_urls:
+        try:
+            download_public_https(str(candidate), target, referer=str(manifest["source"]))
+            ensure_video_readable(target)
+            break
+        except ArchiveError as exc:
+            target.unlink(missing_ok=True)
+            last_error = exc
+    else:
+        raise last_error or ArchiveError("douyin_media_missing", "抖音没有返回可用视频地址。", 69)
+    return {
+        "id": content_id,
+        "title": str(detail.get("desc") or manifest.get("title") or "未命名视频"),
+        "webpage_url": manifest["source"],
     }, target
 
 
@@ -1354,6 +1736,77 @@ def resolve_channel_share_eid(share_url: str) -> str:
     return str(eid)
 
 
+def recent_channel_author(captured_after_ms: int) -> dict | None:
+    database = Path(
+        os.environ.get(
+            "WECHAT_CHANNELS_DATA_DB",
+            str(Path.home() / ".local" / "share" / "wx_channels_download" / "v260810" / "runtime" / "data.db"),
+        )
+    )
+    if not database.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT a.external_id, COALESCE(a.nickname, ''), COALESCE(a.avatar_url, '')
+                FROM browse_history AS h
+                JOIN browse_history_account AS ha ON ha.browse_history_id = h.id
+                JOIN account AS a ON a.id = ha.account_id
+                WHERE h.updated_at >= ? AND ha.role = 'author'
+                ORDER BY h.updated_at DESC
+                """,
+                (captured_after_ms,),
+            ).fetchall()
+    except sqlite3.Error:
+        return None
+    if len(rows) != 1 or not rows[0][0]:
+        return None
+    return {"username": rows[0][0], "nickname": rows[0][1], "avatar": rows[0][2], "signature": ""}
+
+
+def resolve_channel_author_from_url(share_url: str) -> dict:
+    safe_url = validate_https_url(share_url, {"weixin.qq.com", "channels.weixin.qq.com"})
+    eid = resolve_channel_share_eid(safe_url)
+    deep_link = "weixin://biz/finder/openFinderFeed/" + quote(f"exportId={eid}&actionType=0", safe="")
+    captured_after_ms = int(time.time() * 1000)
+    for attempt in range(60):
+        if attempt % 20 == 0:
+            try:
+                subprocess.run(
+                    ["/usr/bin/open", deep_link],
+                    check=True,
+                    timeout=10,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                raise ArchiveError("channels_open_failed", "无法自动在微信中打开该视频号链接。", 69) from exc
+        try:
+            profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": eid}))
+            contact = (profile.get("object") or {}).get("contact") or {}
+            if contact.get("username"):
+                return {
+                    "username": contact["username"],
+                    "nickname": contact.get("nickname", ""),
+                    "avatar": contact.get("headUrl", ""),
+                    "signature": contact.get("signature", ""),
+                }
+        except ArchiveError as exc:
+            if exc.code != "channels_authorization_required":
+                raise
+        captured = recent_channel_author(captured_after_ms)
+        if captured:
+            return captured
+        time.sleep(0.5)
+    raise ArchiveError(
+        "channels_authorization_required",
+        "自动打开未建立视频号采集会话。请使用已授权的 Hermes Computer Use 把下面的原链接发到微信文件传输助手并点开：\n\n"
+        f"{safe_url}",
+        69,
+    )
+
+
 def search_channel_author(query: str) -> dict:
     data = channels_payload_data(channels_api("/api/channels/contact/search", query={"keyword": query}))
     candidates = []
@@ -1372,7 +1825,33 @@ def search_channel_author(query: str) -> dict:
 
 
 def download_channel_url(url: str, root: Path) -> dict:
-    return submit_content(url, root)
+    submitted = submit_content(url, root)
+    manifest_path = root / "jobs" / submitted["job_id"] / "manifest.json"
+    try:
+        resolve_channel_author_from_url(url)
+        manifest = process_content_job(manifest_path, root)
+    except ArchiveError as exc:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        waiting = exc.code == "channels_authorization_required"
+        manifest.update(
+            {
+                "status": "waiting_for_authorization" if waiting else "failed",
+                "updated_at": utc_now(),
+                "error": {"code": exc.code, "message": str(exc)},
+            }
+        )
+        if not waiting:
+            manifest["completed_at"] = utc_now()
+        else:
+            manifest["next_action"] = str(exc)
+        write_json(manifest_path, manifest)
+    return {
+        "ok": manifest["status"] != "failed",
+        "job_id": submitted["job_id"],
+        "status": manifest["status"],
+        "platform": "wechat_channels",
+        "manifest": archive_relative(root, manifest_path),
+    }
 
 
 def ordinary_channel_video(obj: dict) -> bool:
@@ -1430,10 +1909,12 @@ def process_channel_content(manifest: dict, manifest_path: Path, root: Path) -> 
     work_dir = manifest_path.parent / "work"
     task_ids = manifest.get("upstream_task_ids") or []
     if not task_ids:
-        safe_url = validate_https_url(str(manifest["source"]), {"weixin.qq.com", "channels.weixin.qq.com"})
-        eid = resolve_channel_share_eid(safe_url)
-        profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": eid}))
-        obj = profile.get("object") or {}
+        obj = manifest.pop("channel_object", None) or {}
+        if not obj:
+            safe_url = validate_https_url(str(manifest["source"]), {"weixin.qq.com", "channels.weixin.qq.com"})
+            eid = resolve_channel_share_eid(safe_url)
+            profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": eid}))
+            obj = profile.get("object") or {}
         if not ordinary_channel_video(obj):
             raise ArchiveError("channel_video_not_found", "分享链接中没有找到普通视频。")
         records, task_ids = submit_channel_objects([obj], work_dir)
@@ -1453,7 +1934,7 @@ def process_channel_content(manifest: dict, manifest_path: Path, root: Path) -> 
         write_json(manifest_path, manifest)
         return manifest
 
-    records = [channels_api("/api/v1/download_task/list", query={"task_id": task_id}) for task_id in task_ids]
+    records = channel_task_records(task_ids, auto_resume=manifest.get("auto_resume") is True)
     statuses = [record.get("status") for record in records]
     if any(status in {6, 7} for status in statuses):
         raise ArchiveError("channels_download_failed", "视频号后端下载任务失败。", 69)
@@ -1674,29 +2155,187 @@ def process_official_batch(manifest_path: Path, root: Path) -> dict:
         return manifest
 
 
-def download_channel_author(author: str, root: Path) -> dict:
-    if author.endswith("@finder"):
-        selected = {"username": author, "nickname": ""}
-    else:
-        search = search_channel_author(author)
-        candidates = search["candidates"]
-        exact = [candidate for candidate in candidates if candidate["nickname"] == author]
-        choices = exact or candidates
-        if not choices:
-            raise ArchiveError("channel_author_not_found", "没有找到该视频号博主。", 66)
-        if len(choices) != 1:
-            return {"ok": True, "status": "author_selection_required", "query": author, "candidates": choices}
-        selected = choices[0]
+def channel_author_result(root: Path, manifest: dict) -> dict:
+    result = {
+        "ok": True,
+        "job_id": manifest["job_id"],
+        "status": manifest["status"],
+        "author": manifest["author"],
+        "pages": manifest.get("pages", 0),
+        "discovered": (manifest.get("counts") or {}).get("discovered", 0),
+        "submitted": (manifest.get("counts") or {}).get("submitted", 0),
+        "manifest": str(root / "jobs" / manifest["job_id"] / "manifest.json"),
+    }
+    if manifest.get("status") == "awaiting_download_count":
+        result.update(
+            {
+                "available": (manifest.get("counts") or {}).get("eligible", 0),
+                "question": (manifest.get("next_action") or "").split("。请询问", 1)[0] + "。你要下载多少个？",
+            }
+        )
+    return result
 
-    username = selected["username"]
-    job_id, job_dir, manifest = new_job(root, "channel", username)
+
+def resolve_channel_author(author: str) -> dict:
+    if author.startswith("https://"):
+        return resolve_channel_author_from_url(author)
+    if author.endswith("@finder"):
+        return {"username": author, "nickname": ""}
+    search = search_channel_author(author)
+    candidates = search["candidates"]
+    exact = [candidate for candidate in candidates if candidate["nickname"] == author]
+    choices = exact or candidates
+    if not choices:
+        raise ArchiveError("channel_author_not_found", "没有找到该视频号博主。", 66)
+    if len(choices) != 1:
+        raise ArchiveError("channel_author_selection_required", "博主名称不唯一，请使用视频号分享链接。", 66)
+    return choices[0]
+
+
+def discover_channel_author(selected: dict) -> tuple[list[list[dict]], int]:
+    pages = []
+    discovered = 0
+    next_marker = ""
+    while True:
+        page = channels_payload_data(
+            channels_api(
+                "/api/channels/contact/feed/list",
+                query={"username": selected["username"], "next_marker": next_marker},
+            )
+        )
+        objects = page.get("object") or []
+        discovered += len(objects)
+        pages.append([obj for obj in objects if ordinary_channel_video(obj)])
+        if not selected.get("nickname") and objects:
+            selected["nickname"] = ((objects[0].get("contact") or {}).get("nickname") or selected["username"])
+        next_marker = str(page.get("lastBuffer") or "")
+        if page.get("continueFlag") == 0 or not next_marker:
+            return pages, discovered
+
+
+def inspect_channel_author(author: str, root: Path) -> dict:
+    selected = resolve_channel_author(author)
+    pages, discovered = discover_channel_author(selected)
+    objects = [obj for page in pages for obj in page]
+    available = len(objects)
+    job_id, job_dir, manifest = new_job(root, "channel", author)
     manifest.update(
         {
+            "status": "awaiting_download_count",
+            "updated_at": utc_now(),
             "author": selected,
-            "pages": 0,
+            "pages": len(pages),
+            "inventory": {
+                "captured_at": utc_now(),
+                "items": [
+                    {
+                        "id": str(obj.get("id") or ""),
+                        "title": str((obj.get("objectDesc") or {}).get("description") or "未命名视频"),
+                        "payload": obj,
+                    }
+                    for obj in objects
+                ],
+            },
+            "counts": {"discovered": discovered, "eligible": available, "selected": 0, "submitted": 0},
+            "upstream_task_ids": [],
+            "upstream_tasks": [],
+            "auto_resume": False,
+            "next_action": f"当前可下载视频共 {available} 个。请询问用户要下载多少个，收到数量后再继续同一 Job。",
+        }
+    )
+    write_json(job_dir / "manifest.json", manifest)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": manifest["status"],
+        "author": selected,
+        "pages": len(pages),
+        "available": available,
+        "question": f"该博主当前可下载视频共 {available} 个。你要下载多少个？",
+        "manifest": str(job_dir / "manifest.json"),
+    }
+
+
+def inspect_channel_creator(author: str, root: Path) -> dict:
+    selected = resolve_channel_author(author)
+    pages, _ = discover_channel_author(selected)
+    objects = [obj for page in pages for obj in page]
+    if not objects:
+        raise ArchiveError("creator_inventory_empty", "该视频号博主当前没有可下载视频。", 66)
+    job_id, job_dir, manifest = new_job(root, "batch", author)
+    items = [
+        {
+            "id": str(obj.get("id") or ""),
+            "url": author,
+            "title": str((obj.get("objectDesc") or {}).get("description") or "未命名视频"),
+            "published_at": obj.get("createtime"),
+            "payload": obj,
+            "child_job_id": None,
+        }
+        for obj in objects
+    ]
+    manifest.update(
+        {
+            "kind": "creator_batch",
+            "status": "awaiting_download_count",
+            "updated_at": utc_now(),
+            "platform": "wechat_channels",
+            "creator": {
+                "id": selected["username"],
+                "name": selected.get("nickname", ""),
+                "url": author,
+            },
+            "inventory": {"captured_at": utc_now(), "available": len(items), "items": items},
+            "selection": None,
+            "child_job_ids": [],
+            "counts": {"selected": 0, "processing": 0, "completed": 0, "failed": 0},
+            "next_action": f"该博主当前可下载视频共 {len(items)} 个，默认从最新开始。你要下载多少个？",
+        }
+    )
+    write_json(job_dir / "manifest.json", manifest)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": manifest["status"],
+        "platform": "wechat_channels",
+        "creator": manifest["creator"],
+        "available": len(items),
+        "question": manifest["next_action"],
+        "manifest": archive_relative(root, job_dir / "manifest.json"),
+    }
+
+
+def download_channel_plan(job_id: str, limit: int, root: Path) -> dict:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise ArchiveError("invalid_job_id", "Job ID 格式错误。")
+    manifest_path = root / "jobs" / job_id / "manifest.json"
+    if not manifest_path.is_file():
+        raise ArchiveError("job_not_found", "没有找到该任务。", 66)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != "channel" or manifest.get("status") != "awaiting_download_count":
+        raise ArchiveError("job_not_waiting_for_count", "该任务当前不在等待下载数量。", 66)
+    available = int((manifest.get("counts") or {}).get("eligible") or 0)
+    if limit < 1 or limit > available:
+        raise ArchiveError("invalid_download_count", f"下载数量应在 1 到 {available} 之间。")
+
+    selected = manifest.get("author") or {}
+    inventory = (manifest.get("inventory") or {}).get("items") or []
+    objects = [item.get("payload") for item in inventory if isinstance(item.get("payload"), dict)]
+    eligible = len(objects)
+    requested = limit
+    if requested > eligible:
+        raise ArchiveError("channel_inventory_invalid", "本地冻结的视频号作品清单不完整，请重新盘点。", 69)
+
+    manifest.update(
+        {
+            "status": "submitting",
+            "updated_at": utc_now(),
+            "selection": {"limit": requested},
+            "auto_resume": True,
             "counts": {
-                "discovered": 0,
-                "eligible": 0,
+                "discovered": int((manifest.get("counts") or {}).get("discovered") or eligible),
+                "eligible": eligible,
+                "selected": 0,
                 "submitted": 0,
                 "skipped": 0,
                 "submission_failed": 0,
@@ -1705,73 +2344,46 @@ def download_channel_author(author: str, root: Path) -> dict:
                 "completed": 0,
                 "failed": 0,
             },
-            "upstream_task_ids": [],
-            "upstream_tasks": [],
         }
     )
-    next_marker = ""
-    try:
-        while True:
-            page = channels_payload_data(
-                channels_api(
-                    "/api/channels/contact/feed/list",
-                    query={"username": username, "next_marker": next_marker},
-                )
-            )
-            objects = page.get("object") or []
-            manifest["pages"] += 1
-            manifest["counts"]["discovered"] += len(objects)
-            eligible = [obj for obj in objects if ordinary_channel_video(obj)]
-            manifest["counts"]["eligible"] += len(eligible)
-            if not selected.get("nickname") and objects:
-                selected["nickname"] = ((objects[0].get("contact") or {}).get("nickname") or username)
-            output_dir = root / "video_channels" / safe_channel_name(selected.get("nickname") or username, "unknown_author")
-            records, task_ids = submit_channel_objects(eligible, output_dir)
-            manifest["output_dir"] = str(output_dir)
-            manifest["upstream_tasks"].extend(records)
-            manifest["upstream_task_ids"].extend(task_ids)
-            manifest["counts"]["submitted"] += sum(record["disposition"] == "submitted" for record in records)
-            manifest["counts"]["skipped"] += sum(record["disposition"] == "skipped" for record in records)
-            failed = sum(record["disposition"] == "failed" for record in records)
-            manifest["counts"]["submission_failed"] += failed
-            manifest["counts"]["failed"] = manifest["counts"]["submission_failed"]
-            write_json(job_dir / "manifest.json", manifest)
-            next_marker = str(page.get("lastBuffer") or "")
-            if page.get("continueFlag") == 0 or not next_marker:
-                break
+    manifest.pop("next_action", None)
+    output_dir = root / "video_channels" / safe_channel_name(selected.get("nickname") or selected["username"], "unknown_author")
+    manifest["output_dir"] = str(output_dir)
+    chosen_objects = objects[:requested]
+    for start in range(0, requested, 15):
+        chosen = chosen_objects[start : start + 15]
+        records, task_ids = submit_channel_objects(chosen, output_dir)
+        manifest["upstream_tasks"].extend(records)
+        manifest["upstream_task_ids"].extend(task_ids)
+        manifest["counts"]["selected"] += len(chosen)
+        manifest["counts"]["submitted"] += sum(record["disposition"] == "submitted" for record in records)
+        manifest["counts"]["skipped"] += sum(record["disposition"] == "skipped" for record in records)
+        manifest["counts"]["submission_failed"] += sum(record["disposition"] == "failed" for record in records)
+        write_json(manifest_path, manifest)
+    manifest["upstream_task_ids"] = list(dict.fromkeys(manifest["upstream_task_ids"]))
+    manifest["counts"]["failed"] = manifest["counts"]["submission_failed"]
+    manifest["status"] = "queued" if manifest["upstream_task_ids"] else "failed"
+    if manifest["status"] == "failed":
+        manifest["completed_at"] = utc_now()
+    write_json(manifest_path, manifest)
+    return channel_author_result(root, manifest)
 
-        manifest["upstream_task_ids"] = list(dict.fromkeys(manifest["upstream_task_ids"]))
-        manifest["status"] = "queued" if manifest["upstream_task_ids"] else ("failed" if manifest["counts"]["failed"] else "completed")
-        if manifest["status"] in {"failed", "completed"}:
-            manifest["completed_at"] = utc_now()
-        write_json(job_dir / "manifest.json", manifest)
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "status": manifest["status"],
-            "author": selected,
-            "pages": manifest["pages"],
-            "discovered": manifest["counts"]["discovered"],
-            "submitted": manifest["counts"]["submitted"],
-            "manifest": str(job_dir / "manifest.json"),
-        }
-    except (ArchiveError, OSError, ValueError) as exc:
-        manifest.update(
-            {
-                "status": "failed",
-                "completed_at": utc_now(),
-                "error": {"code": getattr(exc, "code", "local_error"), "message": str(exc)},
-            }
-        )
-        write_json(job_dir / "manifest.json", manifest)
-        raise
+
+def channel_task_records(task_ids: list, *, auto_resume: bool) -> list[dict]:
+    records = [channels_api("/api/v1/download_task/list", query={"task_id": task_id}) for task_id in task_ids]
+    statuses = [record.get("status") for record in records]
+    paused_ids = [int(record.get("id") or 0) for record in records if record.get("status") == 3]
+    if auto_resume and paused_ids and not any(status in {0, 1, 2, 4} for status in statuses):
+        channels_api("/api/v1/download_task/resume", body={"task_ids": paused_ids})
+        records = [channels_api("/api/v1/download_task/list", query={"task_id": task_id}) for task_id in task_ids]
+    return records
 
 
 def refresh_channel_manifest(manifest: dict, manifest_path: Path, root: Path) -> dict:
     task_ids = manifest.get("upstream_task_ids") or []
     if not task_ids:
         return manifest
-    records = [channels_api("/api/v1/download_task/list", query={"task_id": task_id}) for task_id in task_ids]
+    records = channel_task_records(task_ids, auto_resume=manifest.get("auto_resume") is True)
     by_id = {int(record.get("id") or 0): record for record in records}
     waiting = downloading = paused = completed = failed = 0
     outputs = []
@@ -1815,18 +2427,24 @@ def refresh_channel_manifest(manifest: dict, manifest_path: Path, root: Path) ->
     )
     manifest["outputs"] = list(dict.fromkeys(outputs))
     update_channel_transcriptions(manifest)
-    if downloading:
+    if manifest.get("status") == "paused_by_user":
+        pass
+    elif downloading:
         manifest["status"] = "downloading"
     elif waiting:
         manifest["status"] = "queued"
     elif paused:
         manifest["status"] = "paused"
-    elif counts["failed"]:
+    elif counts["failed"] or (manifest.get("transcription_counts") or {}).get("failed"):
         manifest["status"] = "completed_with_failures" if completed else "failed"
+    elif (manifest.get("transcription_counts") or {}).get("pending"):
+        manifest["status"] = "transcribing"
     else:
         manifest["status"] = "completed"
     if manifest["status"] in {"completed", "completed_with_failures", "failed"}:
         manifest["completed_at"] = utc_now()
+    else:
+        manifest.pop("completed_at", None)
     manifest["tool_version"] = VERSION
     manifest["updated_at"] = utc_now()
     write_json(manifest_path, manifest)
@@ -2035,6 +2653,21 @@ def transcribe_channel_directory_once(root: Path) -> tuple[dict, bool]:
     return manifest, processed
 
 
+def progress_channel_jobs_once(root: Path) -> None:
+    for manifest_path in sorted((root / "jobs").glob("channel-*/manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (
+                manifest.get("kind") != "channel"
+                or manifest.get("auto_resume") is not True
+                or manifest.get("status") in {"completed", "completed_with_failures", "failed", "paused_by_user"}
+            ):
+                continue
+            refresh_channel_manifest(manifest, manifest_path, root)
+        except (ArchiveError, OSError, json.JSONDecodeError):
+            continue
+
+
 def watch_channel_transcripts(root: Path, interval: int, once: bool) -> dict:
     if interval < 1:
         raise ArchiveError("invalid_interval", "轮询间隔必须至少为 1 秒。")
@@ -2112,6 +2745,8 @@ def job_status(job_id: str, root: Path) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("kind") == "channel":
         manifest = refresh_channel_manifest(manifest, manifest_path, root)
+    elif manifest.get("kind") == "creator_batch":
+        manifest = refresh_creator_batch(manifest, manifest_path, root)
     elif manifest.get("kind") == "batch" and (manifest.get("pagination") or {}).get("complete"):
         manifest = refresh_official_batch(manifest, manifest_path, root)
     return {"ok": True, "job": manifest}
@@ -2132,8 +2767,16 @@ def build_parser() -> argparse.ArgumentParser:
     channel_url.add_argument("--url", required=True)
     channel_search = subparsers.add_parser("search-channel-author")
     channel_search.add_argument("--query", required=True)
-    channel_author = subparsers.add_parser("download-channel-author")
-    channel_author.add_argument("--author", required=True)
+    channel_inspect = subparsers.add_parser("inspect-channel-author")
+    channel_inspect.add_argument("--author", required=True, help="视频号分享链接")
+    channel_plan = subparsers.add_parser("download-channel-plan")
+    channel_plan.add_argument("--job-id", required=True)
+    channel_plan.add_argument("--limit", required=True, type=int, help="总下载数")
+    creator_inspect = subparsers.add_parser("inspect-creator")
+    creator_inspect.add_argument("--url", required=True)
+    creator_plan = subparsers.add_parser("download-creator-plan")
+    creator_plan.add_argument("--job-id", required=True)
+    creator_plan.add_argument("--limit", required=True, type=int, help="总下载数")
     transcribe = subparsers.add_parser("transcribe")
     transcribe.add_argument("--input-name", required=True)
     watcher = subparsers.add_parser("watch-channel-transcripts")
@@ -2212,9 +2855,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "search-channel-author":
             require_enabled()
             result = search_channel_author(args.query)
-        elif args.action == "download-channel-author":
+        elif args.action == "inspect-channel-author":
             require_enabled()
-            result = download_channel_author(args.author, root)
+            result = inspect_channel_author(args.author, root)
+        elif args.action == "download-channel-plan":
+            require_enabled()
+            result = download_channel_plan(args.job_id, args.limit, root)
+        elif args.action == "inspect-creator":
+            require_enabled()
+            result = inspect_creator(args.url, root)
+        elif args.action == "download-creator-plan":
+            require_enabled()
+            result = download_creator_plan(args.job_id, args.limit, root)
         elif args.action == "transcribe":
             require_enabled()
             result = transcribe_media(args.input_name, root)

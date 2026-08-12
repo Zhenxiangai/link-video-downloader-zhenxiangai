@@ -26,10 +26,10 @@ Submit one link and keep the video, image-text post, timeline-aligned raw transc
 
 | Platform | Single link | History batch | Formal package |
 |---|---|---|---|
-| WeChat Channels | Video | Existing creator search and currently visible history remain available | `video.mp4` + three raw transcript formats |
-| Bilibili | Video | Later release | `video.mp4` + three raw transcript formats |
+| WeChat Channels | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
+| Bilibili | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
 | Xiaohongshu | Image-text or video | Later release | `正文.md` + `配图/`, or video and transcripts |
-| Douyin | Video | Later release | `video.mp4` + three raw transcript formats |
+| Douyin | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
 
 A formal video directory contains exactly one `video.mp4`. `原始逐字稿.txt` is mechanically generated from timestamped JSON segments in chronological order; SRT and JSON are retained. Raw transcripts are not polished, corrected, summarized, or translated.
 
@@ -49,9 +49,9 @@ PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
 "$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
-`extract` immediately returns one `content-*` job and a relative manifest path. The persistent content worker then downloads, archives, and transcribes sequentially.
+`extract` immediately returns one `content-*` job and a relative manifest path. The persistent content worker then downloads, archives, and transcribes sequentially. After the user completes one-time unattended Channels authorization, each Channels task temporarily enables compatibility routing and restores the original proxy afterward.
 
-Legacy `download-channel-url` remains a unified-entry alias. Channels creator history and manual transcription retain their dedicated commands. See [SKILL.md](./SKILL.md) for routing.
+`download-channel-url` automatically opens WeChat and submits one Channels link. Channels, Bilibili, and Douyin creator-history batches use two steps: inventory and freeze the visible list, ask how many items the user wants, then submit that count to the same parent Job only after the reply. See [SKILL.md](./SKILL.md) for routing.
 
 ## Content packages
 
@@ -87,7 +87,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.3/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.1.0/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -106,6 +106,10 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.0.1` closed the Hermes URL-install gap. `v1.0.2` changes only the public brand and repository address and makes pinned-core extraction independent of the repository directory name. The internal Skill ID, local data, and four-platform capability boundary remain unchanged.
 
 `v1.0.3` improves Channels authorization recovery and supports task-only in-memory routing when Clash Verge Rev/Mihomo is already active: it does not disable or replace the system proxy, does not write the user's persistent configuration, and restores the original runtime afterward.
+
+`v1.1.0` adds creator-history batches for WeChat Channels, Bilibili, and Douyin. It inventories the currently visible total without downloading, then archives and transcribes the newest user-confirmed count. Real small-batch acceptance covered 280 available Channels videos, 913 available Bilibili videos, and a Douyin creator inventory; each platform completed two videos and three transcript formats, with all 24 formal artifacts matching the manifest byte counts and SHA-256 hashes.
+
+Future versions plan to add Xiaohongshu creator batches and WeChat Official Account article capture. This release does not claim either history-batch capability.
 
 ## Runtime boundary
 
