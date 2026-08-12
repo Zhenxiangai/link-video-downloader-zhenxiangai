@@ -1,7 +1,7 @@
 ---
 name: wechat-archive
-description: "Deploy or operate the one-stop video content extractor for WeChat Channels, Bilibili, Xiaohongshu, and Douyin; use for single-link archives, raw transcripts, task status, and new-computer setup."
-version: 1.0.1
+description: "Deploy or operate Link Video Downloader by ZhenxiangAI for WeChat Channels, Bilibili, Xiaohongshu, and Douyin; use for single-link archives, raw transcripts, task status, and new-computer setup."
+version: 1.0.2
 license: MIT
 platforms: [macos]
 metadata:
@@ -11,9 +11,11 @@ metadata:
     requires_toolsets: [terminal]
 ---
 
-# One-stop Multi-platform Video Content Extractor
+# Link Video Downloader by ZhenxiangAI
 
 Submit one supported link and receive one central `content-*` task. The resident worker downloads or archives the source, keeps one formal video when applicable, and creates Chinese-named raw TXT/SRT/JSON transcripts with timelines. Channels creator history keeps its explicit batch action. Official Account code is retained but paused for V1 and must not be invoked unless the user explicitly resumes that stage.
+
+The public project and repository use the Link Video Downloader by ZhenxiangAI brand. The internal Skill ID remains `wechat-archive` so existing installations, local archives, and user LaunchAgents continue in place.
 
 Package files used by this skill: [bootstrap.sh](scripts/bootstrap.sh), [manage_transcriber.sh](scripts/manage_transcriber.sh), [wechat_archive.py](scripts/wechat_archive.py), [MIT license](references/LICENSE.md), and [third-party notices](references/THIRD_PARTY_NOTICES.md). The URL installer intentionally carries only these files; `bootstrap.sh install` fetches the pinned transparent derivative core from an immutable repository commit, verifies its complete source tree, and stores it in the user's local runtime directory.
 

@@ -1,20 +1,20 @@
-# 一站式多平台视频内容提取器 / Launch Kit
+# Link Video Downloader by ZhenxiangAI / Launch Kit
 
-统一仓库：<https://github.com/Zhenxiangai/wechat-archive>
+统一仓库：<https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai>
 
 分享配图：[social-preview.jpg](./assets/social-preview.jpg)
 
-> `v1.0.0` 已正式发布；Hermes 新机稳定安装入口将在首次安装修复版 `v1.0.1` 发布后改为 <https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.1/SKILL.md>。
+> Hermes 新机稳定安装入口：<https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.2/SKILL.md>。内部 Skill ID 继续使用 `wechat-archive`，已有用户可原位升级。
 
 ## 中文短帖
 
-我开源了 **一站式多平台视频内容提取器**：把微信视频号、B站、小红书或抖音链接发给 Hermes，它会在 Apple Silicon Mac 上生成整洁的本地内容包。
+我开源了 **Link Video Downloader by ZhenxiangAI**：把微信视频号、B站、小红书或抖音链接发给 Hermes，它会在 Apple Silicon Mac 上生成整洁的本地内容包。
 
 视频目录只保留一个正式视频，并生成带时间线的 `原始逐字稿.txt/.srt/.json`；小红书图文保留正文与配图。视频号保留当前可见历史批量能力，公众号代码保留但不属于本次 V1 发布基线。
 
 内容、Cookie 和登录态默认留在用户自己的 Mac；Safari/Chrome Cookie 导入、微信 CA/代理和登录都是分开授权动作。
 
-GitHub：<https://github.com/Zhenxiangai/wechat-archive>
+GitHub：<https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai>
 
 ## 中文长帖
 
@@ -26,7 +26,7 @@ GitHub：<https://github.com/Zhenxiangai/wechat-archive>
 
 做内容研究和知识库时，真正麻烦的不是“下载某一条视频”，而是不同平台有不同入口、登录态、文件名和失败状态。
 
-所以我把现有 `wechat-archive` 扩展成了 **一站式多平台视频内容提取器**。
+所以我做了 **Link Video Downloader by ZhenxiangAI**。
 
 它目前可以：
 
@@ -42,17 +42,17 @@ GitHub：<https://github.com/Zhenxiangai/wechat-archive>
 
 项目坚持 local-first。它不会把 Cookie、证书、系统代理或登录藏在一次静默安装中；Hermes 会先说明变化，再等用户批准、点击或亲自登录。
 
-仓库：<https://github.com/Zhenxiangai/wechat-archive>
+仓库：<https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai>
 
 ## English short post
 
-I open-sourced a **one-stop multi-platform video content extractor** for Apple Silicon Macs.
+I open-sourced **Link Video Downloader by ZhenxiangAI** for Apple Silicon Macs.
 
 Give Hermes one WeChat Channels, Bilibili, Xiaohongshu, or Douyin link. It creates an organized local package with one formal video when applicable, Chinese-named timestamped raw TXT/SRT/JSON transcripts, Xiaohongshu post text and images, plus a traceable manifest.
 
 Channels creator history remains available. Official Account code is retained but paused outside the V1 release baseline. Cookies, CAs, proxy changes, and account login remain separate approvals.
 
-GitHub: <https://github.com/Zhenxiangai/wechat-archive>
+GitHub: <https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai>
 
 ## English long post
 
@@ -62,7 +62,7 @@ Show HN: One local extractor for WeChat, Bilibili, Xiaohongshu, and Douyin
 
 ### Body
 
-I expanded **wechat-archive** from a WeChat Channels workflow into a one-stop local content extractor for WeChat Channels, Bilibili, Xiaohongshu, and Douyin.
+I built **Link Video Downloader by ZhenxiangAI**, a local content extractor for WeChat Channels, Bilibili, Xiaohongshu, and Douyin.
 
 One `extract --url` command identifies the platform and creates a central job. The resident worker produces an organized content package: exactly one formal video when applicable, Chinese-named timestamped raw TXT/SRT/JSON transcripts, article Markdown and local images, plus a manifest with status, byte counts, and hashes.
 
@@ -72,7 +72,7 @@ The unified path has completed real Bilibili 1080p, Xiaohongshu image-text/video
 
 Archive data stays local. Cookie import, local CA/system proxy, and account login are explained and approved separately.
 
-Repository: <https://github.com/Zhenxiangai/wechat-archive>
+Repository: <https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai>
 
 ## 建议标签 / Suggested tags
 
@@ -83,7 +83,7 @@ English: `#opensource` `#localfirst` `#transcription` `#aiagents` `#macOS`
 ## 发布前准确性清单
 
 - 四个平台真实单链接、唯一视频、逐字稿和 manifest 全部通过。
-- 隔离新 HOME 完成透明核心安装、自检与同 Job 授权续跑后，才发布 `v1.0.1/SKILL.md` 机器安装链接。
+- 隔离新 HOME 完成透明核心安装、自检与同 Job 授权续跑，并验证仓库更名后的 `v1.0.2/SKILL.md` 固定链接。
 - 不宣称 Windows、Linux 或 Intel Mac 支持。
 - 不把原始逐字稿描述为完美文案。
 - 不发布 Cookie、证书、账号数据、真实媒体/逐字稿或含个人路径的 manifest。

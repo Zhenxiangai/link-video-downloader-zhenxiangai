@@ -8,7 +8,7 @@ backend_sha256="0e5b490458847b2bb6982f9efa57ccaee7160a92b09734bb892f1aa6de6bbd7c
 model_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin"
 model_sha256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
 core_revision="8c137bf1a56106a050f12567fe0ed587bccea042"
-core_url="https://codeload.github.com/Zhenxiangai/wechat-archive/tar.gz/$core_revision"
+core_url="https://codeload.github.com/Zhenxiangai/link-video-downloader-zhenxiangai/tar.gz/$core_revision"
 core_sha256="acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -184,8 +184,8 @@ install_core() {
     archive="$temporary_dir/source.tar.gz"
     download "$core_url" "$archive"
     tar -xzf "$archive" -C "$temporary_dir"
-    source_core="$temporary_dir/wechat-archive-$core_revision/vendor/transparent-core"
-    core_ok "$source_core" || {
+    source_core=$(find "$temporary_dir" -mindepth 3 -maxdepth 3 -type d -path '*/vendor/transparent-core' -print -quit)
+    [ -n "$source_core" ] && core_ok "$source_core" || {
         find "$temporary_dir" -depth -delete
         fail "downloaded_transparent_core_checksum_mismatch"
     }
