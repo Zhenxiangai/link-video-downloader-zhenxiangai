@@ -95,7 +95,7 @@ Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and 
 ## Authentication and approvals
 
 - Bilibili, Xiaohongshu, and Douyin can import a platform-specific persistent Cookie jar from an already signed-in Safari or Chrome only after explicit approval; a new Mac does not need Chrome installed for this. Ordinary jobs read the jar, not the browser.
-- When Channels capture is needed, the local CA, HTTP/HTTPS proxy, and WeChat login remain separately approved actions.
+- Sending a Channels link authorizes the local CA and capture proxy for that task only. With no existing system proxy, the task restores the previous network settings and removes its CA when it ends. If Clash or another system proxy is already active, the Skill never disables, replaces, or rewrites it; capture proceeds only when a read-only check finds a preconfigured compatible route, otherwise the proxy remains untouched and Hermes reports the next action. User intervention is limited to WeChat login, macOS permission dialogs, an incompatible existing proxy, or a video Hermes cannot open automatically.
 - A job keeps the same ID when it enters `waiting_for_authorization` or `waiting_for_reauthentication`.
 - Cookies, account credentials, browser profiles, CA private keys, and proxy snapshots never enter Git, content packages, manifests, or Hermes responses.
 

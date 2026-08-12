@@ -723,7 +723,14 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
                     "status": "waiting_for_authorization" if channels or not cookie_jar.is_file() else "waiting_for_reauthentication",
                     "updated_at": utc_now(),
                     "next_action": (
-                        "请完成经授权的视频号采集，在微信中打开该视频，然后恢复原任务。"
+                        "用户发送此视频号链接已授权当前任务临时启用本机 CA 与采集代理。"
+                        "请自动启用采集、在已登录微信中打开或刷新该视频，并恢复同一 Job ID；"
+                        "任务成功或失败后立即关闭采集；如本任务改动了系统代理，则恢复原设置。"
+                        "只有遇到微信未登录、macOS 权限弹窗或无法自动打开视频时才请求用户介入。"
+                        "如果无法自动打开，只向用户发送下面的操作，不要追加排障说明：\n\n"
+                        "请复制这个视频号链接，粘贴到这台 Mac 的微信聊天中，然后点开并播放：\n\n"
+                        f"{manifest.get('source')}\n\n"
+                        "视频开始播放后，请回复“已打开”，我会继续同一个任务。"
                         if channels
                         else "请在已授权的 Safari 或 Chrome 登录该平台后，导入持久 Cookie 并继续原任务。"
                     ),
@@ -1302,7 +1309,10 @@ def channels_api(path: str, *, query: dict | None = None, body: dict | None = No
         raise ArchiveError("channels_backend_unavailable", f"视频号采集后端不可用：{exc}", 69) from exc
     if not isinstance(payload, dict) or payload.get("code") != 0:
         message = payload.get("msg", "视频号采集后端返回错误。") if isinstance(payload, dict) else "视频号采集后端响应无效。"
-        if isinstance(payload, dict) and payload.get("code") == 400 and message == "请先初始化客户端 socket 连接":
+        if isinstance(payload, dict) and payload.get("code") == 400 and str(message) in {
+            "请先初始化客户端 socket 连接",
+            "please initialize the client socket connection first",
+        }:
             raise ArchiveError("channels_authorization_required", "视频号采集会话尚未就绪。", 69)
         raise ArchiveError("channels_backend_error", str(message), 69)
     return payload.get("data") or {}
@@ -1310,7 +1320,10 @@ def channels_api(path: str, *, query: dict | None = None, body: dict | None = No
 
 def channels_payload_data(payload: dict) -> dict:
     if payload.get("errCode", 0) != 0:
-        raise ArchiveError("channels_backend_error", str(payload.get("errMsg") or "视频号接口返回错误。"), 69)
+        message = str(payload.get("errMsg") or "视频号接口返回错误。")
+        if message == "WXU.API.finderGetCommentDetail is not a function":
+            raise ArchiveError("channels_authorization_required", "当前连接的页面尚未提供视频号详情接口。", 69)
+        raise ArchiveError("channels_backend_error", message, 69)
     data = payload.get("data") or {}
     if not isinstance(data, dict):
         raise ArchiveError("channels_backend_error", "视频号接口响应无效。", 69)
@@ -1331,7 +1344,7 @@ def resolve_channel_share_eid(share_url: str) -> str:
         method="POST",
     )
     try:
-        with build_opener().open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
             payload = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ArchiveError("channels_share_resolve_failed", f"视频号分享链接解析失败：{exc}", 69) from exc

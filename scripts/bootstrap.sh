@@ -21,6 +21,7 @@ backend_runtime="$backend_root/runtime"
 backend_label="com.wechatarchive.channels"
 backend_plist="$HOME/Library/LaunchAgents/$backend_label.plist"
 proxy_snapshot="$backend_runtime/proxy-before-capture.env"
+clash_socket="/tmp/verge/verge-mihomo.sock"
 model_path=${WECHAT_WHISPER_MODEL:-"$archive_root/models/ggml-small.bin"}
 core_root="$HOME/.local/share/wechat-archive/transparent-core/$core_revision"
 domain="gui/$(id -u)"
@@ -360,7 +361,7 @@ active_service() {
 }
 
 snapshot_proxy() {
-    [ -f "$proxy_snapshot" ] && return
+    [ ! -f "$proxy_snapshot" ] || fail "capture_transaction_already_active: run disable-capture first"
     service=$(active_service)
     [ -n "$service" ] || fail "active_network_service_not_found"
     mkdir -p "$backend_runtime"
@@ -383,47 +384,124 @@ snapshot_value() {
     sed -n "s/^$1=//p" "$proxy_snapshot" | head -n 1
 }
 
+clash_get() {
+    [ -S "$clash_socket" ] || return 1
+    /usr/bin/curl --fail --silent --max-time 3 --unix-socket "$clash_socket" "http://localhost$1"
+}
+
+clash_capture_ready() {
+    service=$1
+    config=$(clash_get /configs) || return 1
+    rules=$(clash_get /rules) || return 1
+    group=$(clash_get /proxies/ChannelsDownload) || return 1
+    "$python_bin" - "$config" "$rules" "$group" \
+        "$(proxy_field -getwebproxy "$service" Enabled)" "$(proxy_field -getwebproxy "$service" Server)" "$(proxy_field -getwebproxy "$service" Port)" \
+        "$(proxy_field -getsecurewebproxy "$service" Enabled)" "$(proxy_field -getsecurewebproxy "$service" Server)" "$(proxy_field -getsecurewebproxy "$service" Port)" \
+        "$(proxy_field -getsocksfirewallproxy "$service" Enabled)" "$(proxy_field -getsocksfirewallproxy "$service" Server)" "$(proxy_field -getsocksfirewallproxy "$service" Port)" <<'PY'
+import json
+import sys
+
+config, rules, group = map(json.loads, sys.argv[1:4])
+mixed_port = str(config.get("mixed-port") or "")
+pairs = zip(sys.argv[4::3], sys.argv[5::3], sys.argv[6::3])
+uses_clash = any(
+    enabled == "Yes" and host in {"127.0.0.1", "localhost", "::1"} and port == mixed_port
+    for enabled, host, port in pairs
+)
+has_rule = any(
+    rule.get("type") == "DomainSuffix"
+    and rule.get("payload") == "qq.com"
+    and rule.get("proxy") == "ChannelsDownload"
+    for rule in (rules.get("rules") or [])
+)
+raise SystemExit(0 if mixed_port and uses_clash and has_rule and "channels_download" in (group.get("all") or []) else 1)
+PY
+}
+
+remove_capture_certificate() {
+    cert_name=$(snapshot_value cert_name)
+    [ -n "$cert_name" ] || return 0
+    installed=$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)
+    [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
+}
+
+capture_status() {
+    clash_ready=false
+    service=$(active_service)
+    if [ -n "$service" ] && clash_capture_ready "$service" >/dev/null 2>&1; then
+        clash_ready=true
+    fi
+    api_get /api/proxy/status | "$python_bin" -c '
+import json, sys
+d = (json.load(sys.stdin).get("data") or {})
+config = d.get("config") or {}
+service = d.get("service") or {}
+system = d.get("system_proxy") or {}
+listener = service.get("status") == "running"
+enabled = bool(config.get("enabled"))
+matched = bool(system.get("matched"))
+clash = sys.argv[1] == "true"
+system_active = bool(config.get("system")) and matched
+route = "system" if system_active else "existing" if clash else "none"
+active = listener and enabled and (system_active or clash)
+print("capture_proxy_listener=" + ("running" if listener else "stopped"))
+print("capture_backend_enabled=" + ("true" if enabled else "false"))
+print("system_proxy_matched=" + ("true" if matched else "false"))
+print("capture_route=" + route)
+print("capture_proxy=" + ("running" if active else "stopped"))
+' "$clash_ready"
+}
+
 enable_capture() {
     check_platform
     api_get /api/status >/dev/null || fail "channels_backend_unavailable"
-    snapshot_proxy
-    service=$(snapshot_value service)
-    upstream=""
-    if [ "$(snapshot_value web_enabled)" = "Yes" ]; then
-        upstream="http://$(snapshot_value web_server):$(snapshot_value web_port)"
-    elif [ "$(snapshot_value secure_enabled)" = "Yes" ]; then
-        upstream="http://$(snapshot_value secure_server):$(snapshot_value secure_port)"
-    elif [ "$(snapshot_value socks_enabled)" = "Yes" ]; then
-        upstream="socks5://$(snapshot_value socks_server):$(snapshot_value socks_port)"
+    service=$(active_service)
+    [ -n "$service" ] || fail "active_network_service_not_found"
+    existing_proxy=false
+    for kind in webproxy securewebproxy socksfirewallproxy; do
+        [ "$(proxy_field -get$kind "$service" Enabled)" != "Yes" ] || existing_proxy=true
+    done
+    capture_route=system
+    if [ "$existing_proxy" = true ]; then
+        clash_capture_ready "$service" >/dev/null 2>&1 || fail "existing_system_proxy_detected: current proxy was not changed; configure a compatible route to 127.0.0.1:2023, then retry"
+        capture_route=existing
     fi
+    snapshot_proxy
+    trap 'cleanup_capture >/dev/null 2>&1 || true' EXIT
+    echo "capture_route=$capture_route" >>"$proxy_snapshot"
     cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
     api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
     cert_file="$backend_runtime/certs/$cert_name.pem"
     [ -f "$cert_file" ] || fail "generated_certificate_not_found"
-    security add-trusted-cert -d -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
-    proxy_json=$("$python_bin" - "$service" "$upstream" <<'PY'
+    echo "cert_name=$cert_name" >>"$proxy_snapshot"
+    security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
+    proxy_json=$("$python_bin" - "$service" "$capture_route" <<'PY'
 import json
 import sys
 
-service, upstream = sys.argv[1:]
+service, route = sys.argv[1:]
 print(json.dumps({"values": {
     "proxy.enabled": True,
-    "proxy.system": True,
+    "proxy.system": route == "system",
     "proxy.defaultInterface": service,
     "proxy.hostname": "127.0.0.1",
     "proxy.port": 2023,
     "proxy.skipInstallRootCert": True,
-    "proxy.upstreamProxy": upstream,
+    "proxy.upstreamProxy": "",
 }, "restart": True}))
 PY
 )
     api_post /api/proxy/config "$proxy_json"
+    capture_status | grep -q '^capture_proxy=running$' || fail "channels_capture_route_not_ready"
+    trap - EXIT
     echo "capture=enabled"
+    echo "capture_route=$capture_route"
     echo "action_required=open_wechat_login_and_requested_content"
 }
 
 restore_proxy() {
     [ -f "$proxy_snapshot" ] || return
+    [ "$(snapshot_value capture_route)" = "system" ] || return
     service=$(snapshot_value service)
     if [ "$(snapshot_value web_enabled)" = "Yes" ]; then
         networksetup -setwebproxy "$service" "$(snapshot_value web_server)" "$(snapshot_value web_port)"
@@ -437,25 +515,60 @@ restore_proxy() {
     else
         networksetup -setsecurewebproxystate "$service" off
     fi
-    find "$proxy_snapshot" -type f -delete
+    if [ "$(snapshot_value socks_enabled)" = "Yes" ]; then
+        networksetup -setsocksfirewallproxy "$service" "$(snapshot_value socks_server)" "$(snapshot_value socks_port)"
+        networksetup -setsocksfirewallproxystate "$service" on
+    else
+        networksetup -setsocksfirewallproxystate "$service" off
+    fi
+}
+
+cleanup_capture() {
+    cleanup_failed=0
+    if api_get /api/status >/dev/null 2>&1; then
+        api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}' || cleanup_failed=1
+    else
+        cleanup_failed=1
+    fi
+    [ -f "$proxy_snapshot" ] || return "$cleanup_failed"
+    remove_capture_certificate || cleanup_failed=1
+    restore_proxy || cleanup_failed=1
+    if [ "$cleanup_failed" -eq 0 ]; then
+        find "$proxy_snapshot" -type f -delete 2>/dev/null || true
+    fi
+    return "$cleanup_failed"
 }
 
 disable_capture() {
-    api_get /api/status >/dev/null || fail "channels_backend_unavailable"
-    disabled=0
-    api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}' || disabled=$?
-    restore_proxy
-    [ "$disabled" -eq 0 ] || fail "channels_capture_disable_failed"
+    capture_route=none
+    [ ! -f "$proxy_snapshot" ] || capture_route=$(snapshot_value capture_route)
+    cleanup_capture || fail "channels_capture_disable_incomplete: local cleanup was attempted; run disable-capture again after the backend recovers"
     echo "capture=disabled"
-    echo "previous_proxy=restored"
+    if [ "$capture_route" = "system" ]; then
+        echo "previous_proxy=restored"
+    else
+        echo "previous_proxy=unchanged"
+    fi
+    echo "capture_certificate=removed"
 }
 
 status() {
     doctor
     if api_get /api/status >/dev/null 2>&1; then
-        api_get /api/status | "$python_bin" -c 'import json,sys; d=json.load(sys.stdin).get("data") or {}; print("channels_api=" + str((d.get("api") or {}).get("status") or "stopped")); print("capture_proxy=" + str((d.get("proxy") or {}).get("status") or "stopped"))'
+        api_get /api/status | "$python_bin" -c 'import json,sys; d=json.load(sys.stdin).get("data") or {}; print("channels_api=" + str((d.get("api") or {}).get("status") or "stopped"))'
+        capture_status || {
+            echo "capture_proxy_listener=unknown"
+            echo "capture_backend_enabled=unknown"
+            echo "system_proxy_matched=unknown"
+            echo "capture_route=unknown"
+            echo "capture_proxy=unknown"
+        }
     else
         echo "channels_api=stopped"
+        echo "capture_proxy_listener=stopped"
+        echo "capture_backend_enabled=unknown"
+        echo "system_proxy_matched=unknown"
+        echo "capture_route=none"
         echo "capture_proxy=stopped"
     fi
     if launchctl print "$domain/com.wechatarchive.transcriber" >/dev/null 2>&1; then
