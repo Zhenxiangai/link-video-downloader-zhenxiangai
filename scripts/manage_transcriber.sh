@@ -24,6 +24,8 @@ case "${WECHAT_WORKER_KIND:-channel}" in
 esac
 plist="$HOME/Library/LaunchAgents/$label.plist"
 domain="gui/$(id -u)"
+managed_python="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
+[ -x "$managed_python" ] || managed_python=python3
 
 resolve_command() {
     configured=$1
@@ -42,7 +44,7 @@ plist_add() {
 }
 
 install_worker() {
-    python_path=$(resolve_command "${WECHAT_PYTHON:-}" python3)
+    python_path=$(resolve_command "${WECHAT_PYTHON:-}" "$managed_python")
     ffmpeg_path=$(resolve_command "${WECHAT_FFMPEG:-}" ffmpeg)
     whisper_path=$(resolve_command "${WECHAT_WHISPER_CLI:-}" whisper-cli)
     model_path=${WECHAT_WHISPER_MODEL:-"$archive_root/models/ggml-small.bin"}
@@ -91,7 +93,7 @@ install_worker() {
 }
 
 status_worker() {
-    python_path=$(resolve_command "${WECHAT_PYTHON:-}" python3)
+    python_path=$(resolve_command "${WECHAT_PYTHON:-}" "$managed_python")
     launchctl print "$domain/$label" >/dev/null
     echo "launchd: running"
     "$python_path" "$worker" "$status_action"

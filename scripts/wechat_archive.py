@@ -23,9 +23,13 @@ from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-VERSION = "1.0.0"
+sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
+
+VERSION = "1.0.1"
+TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
+TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"
 CHANNEL_VIDEO_MEDIA_TYPE = 4
 ARTICLE_HOSTS = {"mp.weixin.qq.com"}
@@ -710,13 +714,19 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
             return process_transparent_video(manifest, manifest_path, root)
         raise ArchiveError("platform_not_implemented", f"平台尚未接入 worker：{manifest.get('platform')}", 69)
     except Exception as exc:
-        if isinstance(exc, ArchiveError) and exc.code == "reauthentication_required":
-            cookie_jar = platform_cookie_jar(str(manifest.get("platform")))
+        if isinstance(exc, ArchiveError) and exc.code in {"reauthentication_required", "channels_authorization_required"}:
+            platform = str(manifest.get("platform"))
+            cookie_jar = platform_cookie_jar(platform)
+            channels = platform == "wechat_channels"
             manifest.update(
                 {
-                    "status": "waiting_for_reauthentication" if cookie_jar.is_file() else "waiting_for_authorization",
+                    "status": "waiting_for_authorization" if channels or not cookie_jar.is_file() else "waiting_for_reauthentication",
                     "updated_at": utc_now(),
-                    "next_action": "请在 Chrome 登录该平台后，执行经授权的持久 Cookie 导入并继续原任务。",
+                    "next_action": (
+                        "请完成经授权的视频号采集，在微信中打开该视频，然后恢复原任务。"
+                        if channels
+                        else "请在已授权的 Safari 或 Chrome 登录该平台后，导入持久 Cookie 并继续原任务。"
+                    ),
                 }
             )
             manifest.pop("completed_at", None)
@@ -799,11 +809,34 @@ def content_worker_status(root: Path) -> dict:
     return {"ok": True, "worker": worker, "manifest": "jobs/content-worker/manifest.json"}
 
 
+def transparent_core_sha256(root: Path) -> str:
+    if not root.is_dir() or root.is_symlink():
+        return ""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        if path.is_symlink():
+            return ""
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(b"\0")
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(CHUNK_BYTES), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def transparent_core_root() -> Path:
-    core = Path(__file__).resolve().parents[1] / "vendor" / "transparent-core"
-    if not (core / "yt_dlp" / "YoutubeDL.py").is_file():
-        raise ArchiveError("transparent_core_missing", "透明派生核心不完整。", 69)
-    return core
+    bundled = Path(__file__).resolve().parents[1] / "vendor" / "transparent-core"
+    installed = Path.home() / ".local" / "share" / "wechat-archive" / "transparent-core" / TRANSPARENT_CORE_REVISION
+    for core in (bundled, installed):
+        if not core.exists():
+            continue
+        if transparent_core_sha256(core) != TRANSPARENT_CORE_SHA256:
+            raise ArchiveError("transparent_core_invalid", f"透明派生核心校验失败：{core}", 69)
+        return core
+    raise ArchiveError("transparent_core_missing", "透明派生核心未安装。请重新运行 bootstrap.sh install。", 69)
 
 
 def platform_cookie_jar(platform: str) -> Path:
@@ -819,7 +852,12 @@ class SilentCookieLogger:
     error = debug
 
 
-def import_chrome_cookies(platform: str, root: Path) -> dict:
+def transparent_core_needs_login(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in ("cookie", "login", "fresh"))
+
+
+def import_browser_cookies(platform: str, browser: str, root: Path) -> dict:
     domains = PLATFORM_COOKIE_DOMAINS.get(platform)
     if not domains:
         raise ArchiveError("invalid_platform", "Cookie 导入只支持 B站、小红书和抖音。")
@@ -830,9 +868,9 @@ def import_chrome_cookies(platform: str, root: Path) -> dict:
     except ImportError as exc:
         raise ArchiveError("transparent_core_invalid", "透明派生核心无法加载 Cookie 模块。", 69) from exc
     try:
-        browser_jar = extract_cookies_from_browser("chrome", logger=SilentCookieLogger())
+        browser_jar = extract_cookies_from_browser(browser, logger=SilentCookieLogger())
     except Exception as exc:
-        raise ArchiveError("cookie_import_failed", "无法从 Chrome 导入 Cookie；请确认浏览器已登录并允许访问。", 69) from exc
+        raise ArchiveError("cookie_import_failed", "无法从浏览器导入 Cookie；请确认已登录并允许访问。", 69) from exc
     target = platform_cookie_jar(platform)
     target.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(target.parent, 0o700)
@@ -843,7 +881,7 @@ def import_chrome_cookies(platform: str, root: Path) -> dict:
         if any(domain == suffix.lstrip(".") or domain.endswith(suffix) for suffix in domains):
             filtered.set_cookie(cookie)
     if not len(filtered):
-        raise ArchiveError("platform_cookies_missing", "Chrome 中没有找到该平台的登录 Cookie。", 69)
+        raise ArchiveError("platform_cookies_missing", "所选浏览器中没有找到该平台的登录 Cookie。", 69)
     filtered.save()
     os.chmod(temporary, 0o600)
     os.replace(temporary, target)
@@ -857,7 +895,25 @@ def import_chrome_cookies(platform: str, root: Path) -> dict:
             manifest.pop("error", None)
             write_json(manifest_path, manifest)
             resumed += 1
-    return {"ok": True, "platform": platform, "status": "imported", "cookie_count": len(filtered), "resumed_jobs": resumed}
+    return {"ok": True, "platform": platform, "browser": browser, "status": "imported", "cookie_count": len(filtered), "resumed_jobs": resumed}
+
+
+def resume_job(job_id: str, root: Path) -> dict:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise ArchiveError("invalid_job_id", "Job ID 格式错误。")
+    manifest_path = root / "jobs" / job_id / "manifest.json"
+    if not manifest_path.is_file():
+        raise ArchiveError("job_not_found", "没有找到该任务。", 66)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != "content" or manifest.get("platform") != "wechat_channels":
+        raise ArchiveError("job_not_resumable", "只有完成视频号采集授权后才使用手动恢复。", 66)
+    if manifest.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}:
+        raise ArchiveError("job_not_waiting", "该任务当前不在授权等待状态。", 66)
+    manifest.update({"status": "queued", "updated_at": utc_now()})
+    manifest.pop("next_action", None)
+    manifest.pop("error", None)
+    write_json(manifest_path, manifest)
+    return {"ok": True, "job_id": job_id, "status": "queued", "platform": manifest.get("platform")}
 
 
 def resolve_transparent_core_url(url: str, platform: str) -> str:
@@ -909,8 +965,7 @@ def download_with_transparent_core(url: str, platform: str, work_dir: Path) -> t
         with YoutubeDL(options) as downloader:
             info = downloader.extract_info(url, download=True)
     except DownloadError as exc:
-        message = str(exc)
-        if "cookie" in message.lower() or "login" in message.lower() or "fresh" in message.lower():
+        if transparent_core_needs_login(exc):
             raise ArchiveError("reauthentication_required", "平台登录态缺失或已失效。", 69) from exc
         raise ArchiveError("transparent_core_failed", "透明派生核心提取失败。", 69) from exc
     candidates = [
@@ -940,6 +995,8 @@ def inspect_with_transparent_core(url: str, platform: str) -> dict:
         with YoutubeDL(options) as downloader:
             return downloader.extract_info(url, download=False, process=False)
     except DownloadError as exc:
+        if transparent_core_needs_login(exc):
+            raise ArchiveError("reauthentication_required", "平台登录态缺失或已失效。", 69) from exc
         raise ArchiveError("transparent_core_failed", "透明派生核心解析失败。", 69) from exc
 
 
@@ -1072,7 +1129,12 @@ def process_transparent_video(manifest: dict, manifest_path: Path, root: Path) -
     except ArchiveError as exc:
         if platform != "bilibili" or exc.code not in {"transparent_core_failed", "reauthentication_required", "video_missing"}:
             raise
-        info, source_video = download_bilibili_fallback(str(manifest["source"]), work_dir)
+        try:
+            info, source_video = download_bilibili_fallback(str(manifest["source"]), work_dir)
+        except ArchiveError:
+            if exc.code == "reauthentication_required":
+                raise exc
+            raise
         route = "bilibili_api_cdn"
     return finalize_video_content(manifest, manifest_path, root, info, source_video, route)
 
@@ -1234,12 +1296,14 @@ def channels_api(path: str, *, query: dict | None = None, body: dict | None = No
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
     request = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST" if data else "GET")
     try:
-        with build_opener().open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
             payload = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ArchiveError("channels_backend_unavailable", f"视频号采集后端不可用：{exc}", 69) from exc
     if not isinstance(payload, dict) or payload.get("code") != 0:
         message = payload.get("msg", "视频号采集后端返回错误。") if isinstance(payload, dict) else "视频号采集后端响应无效。"
+        if isinstance(payload, dict) and payload.get("code") == 400 and message == "请先初始化客户端 socket 连接":
+            raise ArchiveError("channels_authorization_required", "视频号采集会话尚未就绪。", 69)
         raise ArchiveError("channels_backend_error", str(message), 69)
     return payload.get("data") or {}
 
@@ -2067,6 +2131,9 @@ def build_parser() -> argparse.ArgumentParser:
     content_watcher.add_argument("--once", action="store_true")
     cookie_import = subparsers.add_parser("import-browser-cookies")
     cookie_import.add_argument("--platform", required=True, choices=sorted(PLATFORM_COOKIE_DOMAINS))
+    cookie_import.add_argument("--browser", required=True, choices=("safari", "chrome"))
+    resume = subparsers.add_parser("resume")
+    resume.add_argument("--job-id", required=True)
     subparsers.add_parser("transcriber-status")
     subparsers.add_parser("content-worker-status")
     status = subparsers.add_parser("status")
@@ -2094,12 +2161,19 @@ def self_check(root: Path) -> dict:
     for url, expected in expected_platforms.items():
         if submission_url(url)[1] != expected:
             raise ArchiveError("self_check_failed", f"平台识别检查失败：{expected}", 70)
+    core = transparent_core_root()
+    sys.path.insert(0, str(core))
+    try:
+        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: F401
+    except ImportError as exc:
+        raise ArchiveError("transparent_core_invalid", "透明派生核心无法加载。", 69) from exc
     model = Path(os.environ.get("WECHAT_WHISPER_MODEL", "").strip() or root / "models" / "ggml-small.bin").expanduser()
     return {
         "ok": True,
         "version": VERSION,
         "archive_root": str(root),
         "enabled": os.environ.get("WECHAT_ARCHIVE_ENABLED", "").strip().lower() in {"1", "true", "yes"},
+        "transparent_core": str(core),
         "ffmpeg": shutil.which("ffmpeg"),
         "whisper_cli": shutil.which("whisper-cli"),
         "whisper_model": str(model) if model.is_file() else None,
@@ -2139,7 +2213,10 @@ def main(argv: list[str] | None = None) -> int:
             result = watch_content(root, args.interval, args.once)
         elif args.action == "import-browser-cookies":
             require_enabled()
-            result = import_chrome_cookies(args.platform, root)
+            result = import_browser_cookies(args.platform, args.browser, root)
+        elif args.action == "resume":
+            require_enabled()
+            result = resume_job(args.job_id, root)
         elif args.action == "transcriber-status":
             result = channel_transcriber_status(root)
         elif args.action == "content-worker-status":
