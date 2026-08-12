@@ -1,7 +1,7 @@
 ---
 name: wechat-archive
 description: "Deploy or operate Link Video Downloader by ZhenxiangAI for WeChat Channels, Bilibili, Xiaohongshu, and Douyin; use for single-link archives, raw transcripts, task status, and new-computer setup."
-version: 1.0.2
+version: 1.0.3
 license: MIT
 platforms: [macos]
 metadata:

@@ -87,7 +87,7 @@ sh ./scripts/bootstrap.sh status
 新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.2/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.3/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 旧 `article-*`、`batch-*`、`channel-*`、`media-*`、`video_channels/` 和 manifest 原地保留；项目不增加迁移器、自动更新器或回滚管理器。
@@ -104,6 +104,8 @@ hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-
 新统一链路已真实完成：B站 1080P 视频、小红书图文与视频、抖音视频、视频号 1080P 视频。四个视频任务都只有一个正式视频和三种中文名逐字稿；小红书图文保留 `正文.md` 与 4 张有效配图。所有正式产物的字节数和 SHA-256 均与 manifest 一致。
 
 `v1.0.1` 已补齐 Hermes 直链首次安装闭环。`v1.0.2` 只迁移公开品牌和仓库地址，并让固定核心解压不依赖仓库目录名；内部 Skill ID、本地数据和四平台功能边界保持不变。
+
+`v1.0.3` 改进视频号授权恢复，并支持 Clash Verge Rev/Mihomo 已启用时的任务级内存路由：不关闭、不替换系统代理，不写入用户持久配置，任务结束后恢复原运行态。
 
 ## 运行边界
 
