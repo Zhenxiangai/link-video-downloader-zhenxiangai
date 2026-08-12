@@ -7,8 +7,12 @@ release_sha256="505c6a56dbc2252139c795918a68e4860a6cd62057eefd9fbad7b21a5b6cff6e
 backend_sha256="0e5b490458847b2bb6982f9efa57ccaee7160a92b09734bb892f1aa6de6bbd7c"
 model_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin"
 model_sha256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+core_revision="8c137bf1a56106a050f12567fe0ed587bccea042"
+core_url="https://codeload.github.com/Zhenxiangai/wechat-archive/tar.gz/$core_revision"
+core_sha256="acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+hermes_home=${HERMES_HOME:-"$HOME/.hermes"}
 archive_root=${WECHAT_ARCHIVE_ROOT:-"$HOME/Documents/WeChatArchive"}
 backend_root=${WECHAT_CHANNELS_HOME:-"$HOME/.local/share/wx_channels_download/$release"}
 backend_bin="$backend_root/wx_video_download"
@@ -18,10 +22,17 @@ backend_label="com.wechatarchive.channels"
 backend_plist="$HOME/Library/LaunchAgents/$backend_label.plist"
 proxy_snapshot="$backend_runtime/proxy-before-capture.env"
 model_path=${WECHAT_WHISPER_MODEL:-"$archive_root/models/ggml-small.bin"}
+core_root="$HOME/.local/share/wechat-archive/transparent-core/$core_revision"
 domain="gui/$(id -u)"
 
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 export PATH
+
+if [ -x "$hermes_home/hermes-agent/venv/bin/python" ]; then
+    python_bin="$hermes_home/hermes-agent/venv/bin/python"
+else
+    python_bin=$(command -v python3 2>/dev/null || true)
+fi
 
 fail() {
     echo "error=$*" >&2
@@ -36,8 +47,23 @@ hash_ok() {
     [ -f "$1" ] && [ "$(shasum -a 256 "$1" | awk '{print $1}')" = "$2" ]
 }
 
+core_hash() {
+    "$python_bin" - "$script_dir/wechat_archive.py" "$1" <<'PY'
+import runpy
+import sys
+from pathlib import Path
+
+module = runpy.run_path(sys.argv[1])
+print(module["transparent_core_sha256"](Path(sys.argv[2])))
+PY
+}
+
+core_ok() {
+    [ -d "$1" ] && [ "$(core_hash "$1" 2>/dev/null || true)" = "$core_sha256" ]
+}
+
 download() {
-    python3 - "$1" "$2" <<'PY'
+    "$python_bin" - "$1" "$2" <<'PY'
 import sys
 import urllib.request
 
@@ -54,26 +80,36 @@ check_platform() {
 }
 
 api_get() {
-    /usr/bin/curl --fail --silent --max-time 3 "http://127.0.0.1:2022$1"
+    /usr/bin/curl --fail --silent --noproxy '*' --max-time 3 "http://127.0.0.1:2022$1"
 }
 
 api_post() {
-    /usr/bin/curl --fail --silent --max-time 20 \
+    /usr/bin/curl --fail --silent --noproxy '*' --max-time 20 \
         -H 'Content-Type: application/json' \
         -d "$2" "http://127.0.0.1:2022$1" |
-        python3 -c 'import json,sys; data=json.load(sys.stdin); code=data.get("code"); code == 0 or (_ for _ in ()).throw(SystemExit(data.get("msg", "API failed")))'
+        "$python_bin" -c 'import json,sys; data=json.load(sys.stdin); code=data.get("code"); code == 0 or (_ for _ in ()).throw(SystemExit(data.get("msg", "API failed")))'
 }
 
 doctor() {
     echo "platform=$(uname -s)"
     echo "arch=$(uname -m)"
-    for command_name in hermes python3 brew ffmpeg whisper-cli; do
+    for command_name in hermes brew ffmpeg whisper-cli; do
         if has "$command_name"; then
             echo "$command_name=$(command -v "$command_name")"
         else
             echo "$command_name=missing"
         fi
     done
+    if [ -n "$python_bin" ] && [ -x "$python_bin" ]; then
+        echo "python=$python_bin"
+    else
+        echo "python=missing"
+    fi
+    if [ -d "/Applications/WeChat.app" ] || [ -d "$HOME/Applications/WeChat.app" ]; then
+        echo "wechat_app=ready"
+    else
+        echo "wechat_app=missing"
+    fi
     if hash_ok "$model_path" "$model_sha256"; then
         echo "whisper_model=ready"
     elif [ -f "$model_path" ]; then
@@ -87,6 +123,19 @@ doctor() {
         echo "channels_backend_binary=checksum_mismatch"
     else
         echo "channels_backend_binary=missing"
+    fi
+    bundled_core="$script_dir/../vendor/transparent-core"
+    if [ -e "$bundled_core" ]; then
+        active_core="$bundled_core"
+    else
+        active_core="$core_root"
+    fi
+    if core_ok "$active_core"; then
+        echo "transparent_core=ready"
+    elif [ -e "$active_core" ]; then
+        echo "transparent_core=checksum_mismatch"
+    else
+        echo "transparent_core=missing"
     fi
     if has hermes && hermes computer-use status >/dev/null 2>&1; then
         echo "computer_use=installed"
@@ -119,6 +168,29 @@ install_model() {
     hash_ok "$temporary" "$model_sha256" || fail "downloaded_model_checksum_mismatch: $temporary"
     mv "$temporary" "$model_path"
     chmod 600 "$model_path"
+}
+
+install_core() {
+    bundled_core="$script_dir/../vendor/transparent-core"
+    if [ -e "$bundled_core" ]; then
+        core_ok "$bundled_core" || fail "transparent_core_checksum_mismatch: $bundled_core"
+        return
+    fi
+    core_ok "$core_root" && return
+    [ ! -e "$core_root" ] || fail "transparent_core_checksum_mismatch: $core_root"
+    parent=$(dirname -- "$core_root")
+    mkdir -p "$parent"
+    temporary_dir=$(mktemp -d "$parent/.install.XXXXXX")
+    archive="$temporary_dir/source.tar.gz"
+    download "$core_url" "$archive"
+    tar -xzf "$archive" -C "$temporary_dir"
+    source_core="$temporary_dir/wechat-archive-$core_revision/vendor/transparent-core"
+    core_ok "$source_core" || {
+        find "$temporary_dir" -depth -delete
+        fail "downloaded_transparent_core_checksum_mismatch"
+    }
+    mv "$source_core" "$core_root"
+    find "$temporary_dir" -depth -delete
 }
 
 install_computer_use() {
@@ -177,7 +249,7 @@ EOF
 }
 
 ensure_mp_enabled() {
-    python3 - "$backend_config" <<'PY'
+    "$python_bin" - "$backend_config" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -261,15 +333,16 @@ install_backend_service() {
 install_all() {
     check_platform
     has hermes || fail "hermes_missing"
-    has python3 || fail "python3_missing"
+    [ -n "$python_bin" ] && [ -x "$python_bin" ] || fail "python_missing"
     install_computer_use
     install_dependencies
     install_model
+    install_core
     install_backend
     install_backend_service
-    WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
+    WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
         sh "$script_dir/manage_transcriber.sh" install
-    WECHAT_WORKER_KIND=content WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
+    WECHAT_WORKER_KIND=content WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
         sh "$script_dir/manage_transcriber.sh" install
     status
 }
@@ -328,7 +401,7 @@ enable_capture() {
     cert_file="$backend_runtime/certs/$cert_name.pem"
     [ -f "$cert_file" ] || fail "generated_certificate_not_found"
     security add-trusted-cert -d -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
-    proxy_json=$(python3 - "$service" "$upstream" <<'PY'
+    proxy_json=$("$python_bin" - "$service" "$upstream" <<'PY'
 import json
 import sys
 
@@ -364,12 +437,15 @@ restore_proxy() {
     else
         networksetup -setsecurewebproxystate "$service" off
     fi
+    find "$proxy_snapshot" -type f -delete
 }
 
 disable_capture() {
     api_get /api/status >/dev/null || fail "channels_backend_unavailable"
-    api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}'
+    disabled=0
+    api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}' || disabled=$?
     restore_proxy
+    [ "$disabled" -eq 0 ] || fail "channels_capture_disable_failed"
     echo "capture=disabled"
     echo "previous_proxy=restored"
 }
@@ -377,7 +453,7 @@ disable_capture() {
 status() {
     doctor
     if api_get /api/status >/dev/null 2>&1; then
-        api_get /api/status | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print("channels_api=" + d["api"]["status"]); print("capture_proxy=" + d["proxy"]["status"])'
+        api_get /api/status | "$python_bin" -c 'import json,sys; d=json.load(sys.stdin).get("data") or {}; print("channels_api=" + str((d.get("api") or {}).get("status") or "stopped")); print("capture_proxy=" + str((d.get("proxy") or {}).get("status") or "stopped"))'
     else
         echo "channels_api=stopped"
         echo "capture_proxy=stopped"

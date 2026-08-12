@@ -11,14 +11,14 @@
 ![本地内容归档流程](./docs/assets/social-preview.jpg)
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#运行边界)
-[![Version](https://img.shields.io/badge/version-1.0.0%20验收中-8b5cf6)](#当前验收状态)
+[![Latest Release](https://img.shields.io/badge/release-v1.0.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/releases/tag/v1.0.0)
 [![Local first](https://img.shields.io/badge/data-local--first-10b981)](#内容包)
 [![Project License](https://img.shields.io/badge/original%20code-MIT-f59e0b)](./LICENSE)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.0` 正在本地功能分支验收，尚未打标签或发布。当前 GitHub Latest 仍为 `v0.6.0`；固定 `v1.0.0/SKILL.md` 安装链接只会在真实验收通过并完成发布后启用。
+> `v1.0.0` 已公开发布。当前分支准备 `v1.0.1`：修复 Hermes 直链安装未携带透明派生核心的问题；修订版本发布前，请勿把 `v1.0.0` 当作新机四平台就绪证明。
 
 ## 平台能力
 
@@ -40,9 +40,11 @@ B站默认使用仓库固定的透明派生核心；核心提取失败时才切�
 ```bash
 export WECHAT_ARCHIVE_ENABLED=1
 SCRIPT="$PWD/scripts/wechat_archive.py"
+PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
 
-python3 "$SCRIPT" extract --url '<支持的单个链接>'
-python3 "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
+"$PYTHON" "$SCRIPT" extract --url '<支持的单个链接>'
+"$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
 `extract` 立即返回一个 `content-*` 和相对 manifest 路径，下载、归档和转写由 content worker 顺序完成。
@@ -70,7 +72,7 @@ manifest 记录状态、标题、内容类型、规范链接、实际路线、�
 
 ## 安装与原位升级
 
-当前功能分支可在仓库目录中检查：
+仓库目录中可执行：
 
 ```bash
 sh ./scripts/bootstrap.sh doctor
@@ -78,19 +80,19 @@ sh ./scripts/bootstrap.sh install
 sh ./scripts/bootstrap.sh status
 ```
 
-`install` 安装/复用 FFmpeg、whisper.cpp、固定模型和视频号后端，并管理视频号后端、旧转写 worker、新 content worker 三个用户级 LaunchAgent。安装本身不导入 Cookie、不安装 CA、不修改系统代理、不代替用户登录。
+`install` 复用 Hermes 自带 Python，并安装/复用固定透明派生核心、FFmpeg、whisper.cpp、固定模型和视频号后端；无需另装全局 Python。它管理视频号后端、旧转写 worker、新 content worker 三个用户级 LaunchAgent。透明核心从不可变提交下载并进行完整源码树校验。安装本身不导入 Cookie、不安装 CA、不修改系统代理、不代替用户登录。
 
-`v0.6.0` 用户在 `v1.0.0` 真实发布后按以下方式原位覆盖 Skill，然后重跑上述三条命令：
+`v1.0.1` 发布后，新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.1/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 旧 `article-*`、`batch-*`、`channel-*`、`media-*`、`video_channels/` 和 manifest 原地保留；项目不增加迁移器、自动更新器或回滚管理器。
 
 ## 登录态与授权
 
-- B站、小红书、抖音可在用户明确授权后，从已登录 Chrome 按平台导入持久 Cookie jar。普通任务只读持久 jar，不逐任务读 Chrome。
+- B站、小红书、抖音可在用户明确授权后，从已登录 Safari 或 Chrome 按平台导入持久 Cookie jar；新机无需为此额外安装 Chrome。普通任务只读持久 jar，不逐任务读取浏览器。
 - 视频号需要微信采集时，本机 CA、HTTP/HTTPS 代理和微信登录仍是单独授权动作。
 - 任务在首次授权或登录态失效时保持原 `job_id`，进入 `waiting_for_authorization` 或 `waiting_for_reauthentication`。
 - Cookie、账号凭证、浏览器 Profile、CA 私钥和代理快照不进入 Git、内容包、manifest 或 Hermes 回执。
@@ -99,10 +101,7 @@ hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-arch
 
 新统一链路已真实完成：B站 1080P 视频、小红书图文与视频、抖音视频、视频号 1080P 视频。四个视频任务都只有一个正式视频和三种中文名逐字稿；小红书图文保留 `正文.md` 与 4 张有效配图。所有正式产物的字节数和 SHA-256 均与 manifest 一致。
 
-本地功能基线已经满足。对外发布仍需：
-
-- 从发布源码入口完成安装、状态与自检复核；
-- 分别取得提交、推送、打标签和 GitHub Release 授权。
+`v1.0.0` 已完成正式发布；`v1.0.1` 正在补齐 Hermes 直链首次安装闭环。只有隔离新 HOME 中的透明核心安装、状态、自检、同 Job 授权续跑均通过后，才将修订版视为可发布。
 
 ## 运行边界
 

@@ -4,7 +4,7 @@
 
 分享配图：[social-preview.jpg](./assets/social-preview.jpg)
 
-> `v1.0.0` 真实标签发布后，机器安装入口为 <https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.0/SKILL.md>。标签出现前不发布该链接。
+> `v1.0.0` 已正式发布；Hermes 新机稳定安装入口将在首次安装修复版 `v1.0.1` 发布后改为 <https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.1/SKILL.md>。
 
 ## 中文短帖
 
@@ -12,7 +12,7 @@
 
 视频目录只保留一个正式视频，并生成带时间线的 `原始逐字稿.txt/.srt/.json`；小红书图文保留正文与配图。视频号保留当前可见历史批量能力，公众号代码保留但不属于本次 V1 发布基线。
 
-内容、Cookie 和登录态默认留在用户自己的 Mac；Chrome Cookie 导入、微信 CA/代理和登录都是分开授权动作。
+内容、Cookie 和登录态默认留在用户自己的 Mac；Safari/Chrome Cookie 导入、微信 CA/代理和登录都是分开授权动作。
 
 GitHub：<https://github.com/Zhenxiangai/wechat-archive>
 
@@ -83,7 +83,7 @@ English: `#opensource` `#localfirst` `#transcription` `#aiagents` `#macOS`
 ## 发布前准确性清单
 
 - 四个平台真实单链接、唯一视频、逐字稿和 manifest 全部通过。
-- `v1.0.0/SKILL.md` 实际可读后才发布机器安装链接。
+- 隔离新 HOME 完成透明核心安装、自检与同 Job 授权续跑后，才发布 `v1.0.1/SKILL.md` 机器安装链接。
 - 不宣称 Windows、Linux 或 Intel Mac 支持。
 - 不把原始逐字稿描述为完美文案。
 - 不发布 Cookie、证书、账号数据、真实媒体/逐字稿或含个人路径的 manifest。
