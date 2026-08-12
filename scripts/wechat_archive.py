@@ -27,7 +27,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
 TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"

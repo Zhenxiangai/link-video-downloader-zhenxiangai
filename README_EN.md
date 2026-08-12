@@ -2,7 +2,9 @@
 
 [简体中文](./README.md) · **English**
 
-# One-stop Multi-platform Video Content Extractor
+# Link Video Downloader by ZhenxiangAI
+
+**Multi-platform link download, image-text archiving, and raw transcription**
 
 **WeChat Channels · Bilibili · Xiaohongshu · Douyin**
 
@@ -11,14 +13,14 @@ Submit one link and keep the video, image-text post, timeline-aligned raw transc
 ![Local content archive flow](./docs/assets/social-preview.jpg)
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#runtime-boundary)
-[![Latest Release](https://img.shields.io/badge/release-v1.0.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/releases/tag/v1.0.0)
+[![Latest Release](https://img.shields.io/github/v/release/Zhenxiangai/link-video-downloader-zhenxiangai?label=release&color=8b5cf6)](https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai/releases/latest)
 [![Local first](https://img.shields.io/badge/data-local--first-10b981)](#content-packages)
 [![Project License](https://img.shields.io/badge/original%20code-MIT-f59e0b)](./LICENSE)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.0` is public. This branch prepares `v1.0.1`, which fixes the missing transparent derivative core in Hermes URL installs. Until the revision ships, do not treat a `v1.0.0` new-computer install as proof that all four platforms are ready.
+> The project is now **Link Video Downloader by ZhenxiangAI**. `v1.0.2` retains the internal Hermes Skill ID `wechat-archive` and existing local directories, so installed users can upgrade in place.
 
 ## Platform matrix
 
@@ -33,7 +35,7 @@ A formal video directory contains exactly one `video.mp4`. `原始逐字稿.txt`
 
 Bilibili uses the repository-pinned transparent derivative core by default and switches to the runtime API/CDN fallback only when core extraction fails. Both routes have completed real validation; a task retains only the single video from its successful route.
 
-The existing WeChat Official Account single-article and history-batch code, tasks, and archives are retained, but collection is paused and is not part of the `v1.0.0` release baseline. It will resume as a later iteration after the video release.
+The existing WeChat Official Account single-article and history-batch code, tasks, and archives are retained, but collection is paused outside the current video-release baseline and will resume in a later iteration.
 
 ## Unified CLI
 
@@ -82,10 +84,10 @@ sh ./scripts/bootstrap.sh status
 
 `install` reuses Hermes' managed Python and obtains or reuses the pinned transparent derivative core, FFmpeg, whisper.cpp, the pinned model, and the Channels backend; no separate global Python is required. The core comes from an immutable commit and is verified as a complete source tree. It manages three user LaunchAgents: the backend, the legacy Channels transcriber, and the central content worker. Installation itself does not import Cookies, install a CA, change the system proxy, or log in to any account.
 
-After `v1.0.1` is released, new computers and existing users install or upgrade the same Skill and rerun the three commands above:
+New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.1/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.2/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -101,7 +103,7 @@ Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and 
 
 The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-text and video, Douyin video, and WeChat Channels 1080p video. Every verified video package contains one formal video and three Chinese-named transcript files. The Xiaohongshu image-text package contains `正文.md` and four valid images. Every formal artifact matches the byte count and SHA-256 recorded in its manifest.
 
-`v1.0.0` is published. `v1.0.1` is closing the Hermes URL-install gap. The revision is release-ready only after an isolated new HOME proves core installation, status, self-check, and same-Job authorization resumption.
+`v1.0.1` closed the Hermes URL-install gap. `v1.0.2` changes only the public brand and repository address and makes pinned-core extraction independent of the repository directory name. The internal Skill ID, local data, and four-platform capability boundary remain unchanged.
 
 ## Runtime boundary
 

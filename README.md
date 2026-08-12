@@ -1,6 +1,8 @@
 <div align="center">
 
-# 一站式多平台视频内容提取器
+# Link Video Downloader by ZhenxiangAI
+
+**一站式多平台链接视频下载、图文归档与逐字稿生成**
 
 **视频号 · B站 · 小红书 · 抖音**
 
@@ -11,14 +13,14 @@
 ![本地内容归档流程](./docs/assets/social-preview.jpg)
 
 [![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#运行边界)
-[![Latest Release](https://img.shields.io/badge/release-v1.0.0-8b5cf6)](https://github.com/Zhenxiangai/wechat-archive/releases/tag/v1.0.0)
+[![Latest Release](https://img.shields.io/github/v/release/Zhenxiangai/link-video-downloader-zhenxiangai?label=release&color=8b5cf6)](https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai/releases/latest)
 [![Local first](https://img.shields.io/badge/data-local--first-10b981)](#内容包)
 [![Project License](https://img.shields.io/badge/original%20code-MIT-f59e0b)](./LICENSE)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.0` 已公开发布。当前分支准备 `v1.0.1`：修复 Hermes 直链安装未携带透明派生核心的问题；修订版本发布前，请勿把 `v1.0.0` 当作新机四平台就绪证明。
+> 项目已更名为 **Link Video Downloader by ZhenxiangAI**。`v1.0.2` 保留内部 Hermes Skill ID `wechat-archive` 和原有本地目录，已有用户可原位升级。
 
 ## 平台能力
 
@@ -33,7 +35,7 @@
 
 B站默认使用仓库固定的透明派生核心；核心提取失败时才切换运行时 API/CDN 备选。两条路线均已真实验证，任务只保留最终成功路线的一个视频。
 
-微信公众号单篇与历史批量代码、已有任务和归档仍被保留，但采集阶段当前暂停，不属于 `v1.0.0` 发布基线；后续将在视频版发布后继续迭代。
+微信公众号单篇与历史批量代码、已有任务和归档仍被保留，但采集阶段当前暂停，不属于当前视频版发布基线；后续继续迭代。
 
 ## 统一命令
 
@@ -82,10 +84,10 @@ sh ./scripts/bootstrap.sh status
 
 `install` 复用 Hermes 自带 Python，并安装/复用固定透明派生核心、FFmpeg、whisper.cpp、固定模型和视频号后端；无需另装全局 Python。它管理视频号后端、旧转写 worker、新 content worker 三个用户级 LaunchAgent。透明核心从不可变提交下载并进行完整源码树校验。安装本身不导入 Cookie、不安装 CA、不修改系统代理、不代替用户登录。
 
-`v1.0.1` 发布后，新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
+新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-archive/v1.0.1/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.0.2/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 旧 `article-*`、`batch-*`、`channel-*`、`media-*`、`video_channels/` 和 manifest 原地保留；项目不增加迁移器、自动更新器或回滚管理器。
@@ -101,7 +103,7 @@ hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/wechat-arch
 
 新统一链路已真实完成：B站 1080P 视频、小红书图文与视频、抖音视频、视频号 1080P 视频。四个视频任务都只有一个正式视频和三种中文名逐字稿；小红书图文保留 `正文.md` 与 4 张有效配图。所有正式产物的字节数和 SHA-256 均与 manifest 一致。
 
-`v1.0.0` 已完成正式发布；`v1.0.1` 正在补齐 Hermes 直链首次安装闭环。只有隔离新 HOME 中的透明核心安装、状态、自检、同 Job 授权续跑均通过后，才将修订版视为可发布。
+`v1.0.1` 已补齐 Hermes 直链首次安装闭环。`v1.0.2` 只迁移公开品牌和仓库地址，并让固定核心解压不依赖仓库目录名；内部 Skill ID、本地数据和四平台功能边界保持不变。
 
 ## 运行边界
 
