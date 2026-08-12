@@ -22,6 +22,9 @@ backend_label="com.wechatarchive.channels"
 backend_plist="$HOME/Library/LaunchAgents/$backend_label.plist"
 proxy_snapshot="$backend_runtime/proxy-before-capture.env"
 clash_socket="/tmp/verge/verge-mihomo.sock"
+clash_config="$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml"
+clash_capture_proxy="wechat_archive_capture"
+clash_default_group="wechat_archive_default"
 model_path=${WECHAT_WHISPER_MODEL:-"$archive_root/models/ggml-small.bin"}
 core_root="$HOME/.local/share/wechat-archive/transparent-core/$core_revision"
 domain="gui/$(id -u)"
@@ -389,33 +392,144 @@ clash_get() {
     /usr/bin/curl --fail --silent --max-time 3 --unix-socket "$clash_socket" "http://localhost$1"
 }
 
-clash_capture_ready() {
+clash_is_system_proxy() {
     service=$1
     config=$(clash_get /configs) || return 1
-    rules=$(clash_get /rules) || return 1
-    group=$(clash_get /proxies/ChannelsDownload) || return 1
-    "$python_bin" - "$config" "$rules" "$group" \
+    "$python_bin" - "$config" \
         "$(proxy_field -getwebproxy "$service" Enabled)" "$(proxy_field -getwebproxy "$service" Server)" "$(proxy_field -getwebproxy "$service" Port)" \
         "$(proxy_field -getsecurewebproxy "$service" Enabled)" "$(proxy_field -getsecurewebproxy "$service" Server)" "$(proxy_field -getsecurewebproxy "$service" Port)" \
         "$(proxy_field -getsocksfirewallproxy "$service" Enabled)" "$(proxy_field -getsocksfirewallproxy "$service" Server)" "$(proxy_field -getsocksfirewallproxy "$service" Port)" <<'PY'
 import json
 import sys
 
-config, rules, group = map(json.loads, sys.argv[1:4])
+config = json.loads(sys.argv[1])
 mixed_port = str(config.get("mixed-port") or "")
-pairs = zip(sys.argv[4::3], sys.argv[5::3], sys.argv[6::3])
-uses_clash = any(
-    enabled == "Yes" and host in {"127.0.0.1", "localhost", "::1"} and port == mixed_port
-    for enabled, host, port in pairs
+pairs = zip(sys.argv[2::3], sys.argv[3::3], sys.argv[4::3])
+enabled = [(host, port) for state, host, port in pairs if state == "Yes"]
+uses_clash = bool(enabled) and all(
+    host in {"127.0.0.1", "localhost", "::1"} and port == mixed_port
+    for host, port in enabled
 )
+raise SystemExit(0 if mixed_port and uses_clash else 1)
+PY
+}
+
+clash_capture_ready() {
+    service=$1
+    clash_is_system_proxy "$service" || return 1
+    rules=$(clash_get /rules) || return 1
+    clash_get "/proxies/$clash_capture_proxy" >/dev/null || return 1
+    "$python_bin" - "$rules" "$clash_capture_proxy" <<'PY'
+import json
+import sys
+
+rules = json.loads(sys.argv[1]).get("rules") or []
+target = sys.argv[2]
 has_rule = any(
     rule.get("type") == "DomainSuffix"
     and rule.get("payload") == "qq.com"
-    and rule.get("proxy") == "ChannelsDownload"
-    for rule in (rules.get("rules") or [])
+    and rule.get("proxy") == target
+    for rule in rules
 )
-raise SystemExit(0 if mixed_port and uses_clash and has_rule and "channels_download" in (group.get("all") or []) else 1)
+raise SystemExit(0 if has_rule else 1)
 PY
+}
+
+clash_put() {
+    /usr/bin/curl --fail --silent --output /dev/null --max-time 60 \
+        --unix-socket "$clash_socket" -X PUT -H 'Content-Type: application/json' \
+        --data-binary @- 'http://localhost/configs?force=true'
+}
+
+clash_patch() {
+    /usr/bin/curl --fail --silent --output /dev/null --max-time 60 \
+        --unix-socket "$clash_socket" -X PATCH -H 'Content-Type: application/json' \
+        --data-binary @- 'http://localhost/configs'
+}
+
+enable_clash_capture() {
+    [ -f "$clash_config" ] || return 1
+    payload=$("$python_bin" - "$clash_config" "$clash_socket" "$clash_capture_proxy" "$clash_default_group" <<'PY'
+import http.client
+import json
+import socket
+import sys
+from pathlib import Path
+
+import yaml
+
+config_path, socket_path, capture_proxy, default_group = sys.argv[1:]
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(socket_path)
+
+def unix_get(path):
+    connection = UnixHTTPConnection("localhost", timeout=3)
+    connection.request("GET", path)
+    response = connection.getresponse()
+    if response.status != 200:
+        raise SystemExit(f"Mihomo API returned HTTP {response.status}")
+    return json.loads(response.read())
+
+config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+if not isinstance(config, dict):
+    raise SystemExit("invalid Clash configuration")
+proxies = config.get("proxies") or []
+groups = config.get("proxy-groups") or []
+reserved = {capture_proxy, default_group}
+if any(item.get("name") in reserved for item in [*proxies, *groups] if isinstance(item, dict)):
+    raise SystemExit("reserved capture proxy name already exists")
+
+mode = unix_get("/configs").get("mode") or config.get("mode")
+if mode == "global":
+    selected = unix_get("/proxies/GLOBAL").get("now")
+    available = {item.get("name") for item in [*proxies, *groups] if isinstance(item, dict)} | {"DIRECT", "REJECT"}
+    if not selected or selected not in available:
+        raise SystemExit("current GLOBAL selection is not reusable")
+    groups = [{"name": default_group, "type": "select", "proxies": [selected]}, *groups]
+    rules = [f"MATCH,{default_group}"]
+elif mode == "direct":
+    rules = ["MATCH,DIRECT"]
+elif mode == "rule":
+    rules = list(config.get("rules") or [])
+else:
+    raise SystemExit(f"unsupported Clash mode: {mode}")
+
+config["mode"] = "rule"
+config["proxies"] = [{"name": capture_proxy, "type": "http", "server": "127.0.0.1", "port": 2023}, *proxies]
+config["proxy-groups"] = groups
+config["rules"] = [
+    "PROCESS-NAME,wx_video_download,DIRECT",
+    f"DOMAIN-SUFFIX,qq.com,{capture_proxy}",
+    *rules,
+]
+print(json.dumps({"payload": yaml.safe_dump(config, allow_unicode=True, sort_keys=False)}))
+PY
+) || return 1
+    printf '%s' "$payload" | clash_put
+}
+
+restore_clash_runtime() {
+    [ "$(snapshot_value capture_route)" = "mihomo_runtime" ] || return 0
+    [ "$(snapshot_value mihomo_runtime_pending)" = "true" ] || return 0
+    payload=$("$python_bin" - "$clash_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]).resolve()
+if not path.is_file():
+    raise SystemExit("original Clash configuration is missing")
+print(json.dumps({"path": str(path)}))
+PY
+) || return 1
+    printf '%s' "$payload" | clash_put || return 1
+    mode=$(snapshot_value mihomo_mode)
+    printf '{"mode":"%s"}' "$mode" | clash_patch || return 1
+    [ "$(clash_get /configs | "$python_bin" -c 'import json,sys; print(json.load(sys.stdin).get("mode") or "")')" = "$mode" ] || return 1
+    ! clash_capture_ready "$(snapshot_value service)"
 }
 
 remove_capture_certificate() {
@@ -442,7 +556,7 @@ enabled = bool(config.get("enabled"))
 matched = bool(system.get("matched"))
 clash = sys.argv[1] == "true"
 system_active = bool(config.get("system")) and matched
-route = "system" if system_active else "existing" if clash else "none"
+route = "system" if system_active else "mihomo" if clash else "none"
 active = listener and enabled and (system_active or clash)
 print("capture_proxy_listener=" + ("running" if listener else "stopped"))
 print("capture_backend_enabled=" + ("true" if enabled else "false"))
@@ -463,12 +577,20 @@ enable_capture() {
     done
     capture_route=system
     if [ "$existing_proxy" = true ]; then
-        clash_capture_ready "$service" >/dev/null 2>&1 || fail "existing_system_proxy_detected: current proxy was not changed; configure a compatible route to 127.0.0.1:2023, then retry"
-        capture_route=existing
+        if clash_is_system_proxy "$service"; then
+            capture_route=mihomo_runtime
+        else
+            fail "unsupported_existing_proxy: current proxy was not changed; automatic capture routing requires Clash Verge Rev/Mihomo"
+        fi
     fi
     snapshot_proxy
     trap 'cleanup_capture >/dev/null 2>&1 || true' EXIT
     echo "capture_route=$capture_route" >>"$proxy_snapshot"
+    if [ "$capture_route" = "mihomo_runtime" ]; then
+        mode=$(clash_get /configs | "$python_bin" -c 'import json,sys; print(json.load(sys.stdin).get("mode") or "")')
+        case "$mode" in global|rule|direct) ;; *) fail "unsupported_mihomo_mode: $mode" ;; esac
+        echo "mihomo_mode=$mode" >>"$proxy_snapshot"
+    fi
     cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
     api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
     cert_file="$backend_runtime/certs/$cert_name.pem"
@@ -492,6 +614,10 @@ print(json.dumps({"values": {
 PY
 )
     api_post /api/proxy/config "$proxy_json"
+    if [ "$capture_route" = "mihomo_runtime" ]; then
+        echo "mihomo_runtime_pending=true" >>"$proxy_snapshot"
+        enable_clash_capture || fail "mihomo_capture_route_failed"
+    fi
     capture_status | grep -q '^capture_proxy=running$' || fail "channels_capture_route_not_ready"
     trap - EXIT
     echo "capture=enabled"
@@ -501,7 +627,7 @@ PY
 
 restore_proxy() {
     [ -f "$proxy_snapshot" ] || return
-    [ "$(snapshot_value capture_route)" = "system" ] || return
+    [ "$(snapshot_value capture_route)" = "system" ] || return 0
     service=$(snapshot_value service)
     if [ "$(snapshot_value web_enabled)" = "Yes" ]; then
         networksetup -setwebproxy "$service" "$(snapshot_value web_server)" "$(snapshot_value web_port)"
@@ -525,6 +651,9 @@ restore_proxy() {
 
 cleanup_capture() {
     cleanup_failed=0
+    if [ -f "$proxy_snapshot" ] && ! restore_clash_runtime; then
+        return 1
+    fi
     if api_get /api/status >/dev/null 2>&1; then
         api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}' || cleanup_failed=1
     else

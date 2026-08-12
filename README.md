@@ -95,7 +95,7 @@ hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-
 ## 登录态与授权
 
 - B站、小红书、抖音可在用户明确授权后，从已登录 Safari 或 Chrome 按平台导入持久 Cookie jar；新机无需为此额外安装 Chrome。普通任务只读持久 jar，不逐任务读取浏览器。
-- 用户发送视频号链接即授权仅为该任务临时启用本机 CA 与采集代理。若没有现有系统代理，任务结束后会恢复原网络设置并删除该任务 CA；若已有 Clash 等系统代理，Skill 不会关闭、覆盖或改写它，只有只读检测到预先配置的兼容路由时才继续，否则会保持代理不变并给出下一步。只有微信登录、macOS 权限弹窗、现有代理不兼容或无法自动打开视频时才需要用户介入。
+- 用户发送视频号链接即授权仅为该任务临时启用本机 CA 与采集代理。若没有现有系统代理，任务结束后会恢复原网络设置并删除该任务 CA；若已有 Clash Verge Rev（Mihomo）系统代理，Skill 会自动加载仅存在于当前任务的内存路由，系统代理端口和用户持久配置始终不变，任务结束后恢复原运行配置。其他无可控接口的系统代理会保持不变并明确停止。只有微信登录、macOS 权限弹窗、不受支持的现有代理或无法自动打开视频时才需要用户介入。
 - 任务在首次授权或登录态失效时保持原 `job_id`，进入 `waiting_for_authorization` 或 `waiting_for_reauthentication`。
 - Cookie、账号凭证、浏览器 Profile、CA 私钥和代理快照不进入 Git、内容包、manifest 或 Hermes 回执。
 
