@@ -1,8 +1,11 @@
 import importlib.util
 import json
+import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "wechat_archive.py"
@@ -14,6 +17,66 @@ SPEC.loader.exec_module(archive)
 
 
 class OfficialBatchResilienceTests(unittest.TestCase):
+    def build_official_history_db(self, path: Path, accounts: list[tuple[str, str, str, int]]) -> None:
+        with sqlite3.connect(path) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE browse_history (id TEXT PRIMARY KEY, type TEXT, url TEXT, updated_at INTEGER);
+                CREATE TABLE browse_history_account (browse_history_id TEXT, account_id TEXT, role TEXT);
+                CREATE TABLE account (id TEXT PRIMARY KEY, external_id TEXT, nickname TEXT);
+                """
+            )
+            for index, (biz, external_id, nickname, updated_at) in enumerate(accounts):
+                history_id = f"history-{index}"
+                account_id = f"account-{index}"
+                connection.execute(
+                    "INSERT INTO browse_history VALUES (?, 'article', ?, ?)",
+                    (history_id, f"https://mp.weixin.qq.com/s?__biz={biz}&mid=1&idx=1&sn=test", updated_at),
+                )
+                connection.execute("INSERT INTO account VALUES (?, ?, ?)", (account_id, external_id, nickname))
+                connection.execute(
+                    "INSERT INTO browse_history_account VALUES (?, ?, 'author')",
+                    (history_id, account_id),
+                )
+
+    def test_known_official_account_accepts_exact_source_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "data.db"
+            self.build_official_history_db(database, [("biz-one", "gh_one", "唯一作者", 2_000)])
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "ALTER TABLE browse_history ADD COLUMN source_url TEXT"
+                )
+                connection.execute(
+                    "UPDATE browse_history SET source_url = ?",
+                    ("https://mp.weixin.qq.com/s/exact-source",),
+                )
+            with patch.dict(os.environ, {"WECHAT_CHANNELS_DATA_DB": str(database)}):
+                account = archive.known_official_account_for_source(
+                    "https://mp.weixin.qq.com/s/exact-source", Path(temporary)
+                )
+
+            self.assertEqual(account["biz"], "biz-one")
+            self.assertEqual(account["account_name"], "唯一作者")
+            self.assertTrue(account["account_id"])
+
+    def test_known_official_account_ignores_other_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "data.db"
+            self.build_official_history_db(database, [("biz-one", "gh_one", "其他作者", 2_000)])
+            with sqlite3.connect(database) as connection:
+                connection.execute("ALTER TABLE browse_history ADD COLUMN source_url TEXT")
+                connection.execute(
+                    "UPDATE browse_history SET source_url = ?",
+                    ("https://mp.weixin.qq.com/s/other-source",),
+                )
+            with patch.dict(os.environ, {"WECHAT_CHANNELS_DATA_DB": str(database)}):
+                self.assertIsNone(
+                    archive.known_official_account_for_source(
+                        "https://mp.weixin.qq.com/s/exact-source", Path(temporary)
+                    )
+                )
+
     def test_dedup_scan_skips_unrelated_corrupt_content_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -55,6 +118,99 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             self.assertEqual(refreshed["items"][0]["result"], "failed")
             self.assertEqual(refreshed["items"][0]["error_code"], "child_manifest_invalid")
             self.assertEqual(refreshed["status"], "completed_with_failures")
+
+    def test_process_official_article_uses_local_session_backend(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job_dir = root / "jobs" / "content-20000101T000000Z-00000000"
+            job_dir.mkdir(parents=True)
+            manifest_path = job_dir / "manifest.json"
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            manifest = {
+                "job_id": job_dir.name,
+                "kind": "content",
+                "status": "downloading",
+                "platform": "wechat_official_account",
+                "source": source,
+            }
+            archive.write_json(manifest_path, manifest)
+            article = {
+                "content_id": "article-one",
+                "canonical_url": source,
+                "published_at": "2026-08-12T12:00:00Z",
+            }
+            with (
+                patch.object(archive, "fetch_official_article_with_session", return_value=(b"<html>article</html>", "text/html", source)) as session_fetch,
+                patch.object(archive, "official_article_metadata", return_value=article),
+                patch.object(archive, "archive_article_html") as archive_html,
+                patch.object(archive, "finalize_official_article", return_value={"status": "completed"}) as finalize,
+            ):
+                result = archive.process_official_article(manifest, manifest_path, root)
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(manifest["published_at"], "2026-08-12T12:00:00Z")
+            session_fetch.assert_called_once_with(source)
+            archive_html.assert_called_once()
+            finalize.assert_called_once()
+
+    def test_official_article_metadata_extracts_wechat_publish_timestamp(self):
+        source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+        metadata = archive.official_article_metadata(source, b'<script>var ct = "1786536000";</script>')
+        self.assertEqual(metadata["published_at"], "2026-08-12T12:00:00Z")
+
+    def test_archive_article_markdown_includes_inventory_publish_time(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job_dir = root / "jobs" / "content-20000101T000000Z-00000000"
+            job_dir.mkdir(parents=True)
+            manifest_path = job_dir / "manifest.json"
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            manifest = {
+                "job_id": job_dir.name,
+                "kind": "content",
+                "status": "downloading",
+                "source": source,
+                "published_at": "2026-08-12T12:00:00Z",
+            }
+            html_body = b"<html><head><meta property='og:title' content='test'></head><body><div id='js_content'>article body text long enough</div></body></html>"
+            archive.archive_article_html(
+                source,
+                html_body,
+                root,
+                job_context=(job_dir.name, job_dir, manifest),
+            )
+            markdown = (job_dir / "article.md").read_text(encoding="utf-8")
+            self.assertIn("- 发布日期：2026-08-12T12:00:00Z", markdown)
+
+    def test_submit_official_batch_children_copies_inventory_publish_time(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_dir = root / "jobs" / "batch-20260813T000000Z-aaaaaaaa"
+            parent_dir.mkdir(parents=True)
+            parent_path = parent_dir / "manifest.json"
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            manifest = {
+                "job_id": parent_dir.name,
+                "kind": "batch",
+                "status": "processing",
+                "items": [
+                    {
+                        "content_id": "article-one",
+                        "canonical_url": source,
+                        "title": "测试文章",
+                        "published_at": "2026-08-12T12:00:00Z",
+                        "child_job_id": None,
+                        "result": "discovered",
+                    }
+                ],
+            }
+            archive.write_json(parent_path, manifest)
+            with patch.object(archive, "refresh_official_batch", side_effect=lambda value, *_: value):
+                archive.submit_official_batch_children(manifest, parent_path, root)
+            child_id = manifest["items"][0]["child_job_id"]
+            child = json.loads((root / "jobs" / child_id / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(child["published_at"], "2026-08-12T12:00:00Z")
+            self.assertEqual(child["title"], "测试文章")
 
 
 if __name__ == "__main__":
