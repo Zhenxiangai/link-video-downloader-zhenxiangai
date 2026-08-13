@@ -614,6 +614,124 @@ def submit_content(url: str, root: Path) -> dict:
     }
 
 
+def frozen_channel_child_job_id(parent_job_id: str, item: dict) -> str:
+    match = re.fullmatch(r"batch-(\d{8}T\d{6}Z)-[0-9a-f]{8}", parent_job_id)
+    if not match:
+        raise ArchiveError("invalid_job_id", "父任务 Job ID 格式错误。")
+    identity = f"{parent_job_id}\0{item.get('id')}".encode()
+    return f"content-{match.group(1)}-{hashlib.sha256(identity).hexdigest()[:8]}"
+
+
+def submit_frozen_channel_content(item: dict, root: Path, parent_job_id: str) -> dict:
+    normalized, platform = submission_url(str(item["url"]))
+    if platform != "wechat_channels":
+        raise ArchiveError("invalid_channels_url", "冻结的视频号子任务必须使用视频号链接。")
+    safe_source = canonical_url(normalized)
+    frozen = item.get("payload") or {}
+    if not isinstance(frozen, dict) or not frozen:
+        raise ArchiveError("channel_inventory_invalid", "冻结的视频号作品对象缺失。", 69)
+    job_id = frozen_channel_child_job_id(parent_job_id, item)
+    job_dir = root / "jobs" / job_id
+    manifest_path = job_dir / "manifest.json"
+    existing = read_json_if_valid(manifest_path) if manifest_path.is_file() else None
+    if existing:
+        if existing.get("parent_job_id") != parent_job_id or str(existing.get("content_id")) != str(item["id"]):
+            raise ArchiveError("creator_child_identity_conflict", "冻结子任务身份冲突。", 69)
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "status": existing.get("status"),
+            "platform": "wechat_channels",
+            "manifest": archive_relative(root, manifest_path),
+        }
+    job_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": 1,
+        "tool_version": VERSION,
+        "job_id": job_id,
+        "kind": "content",
+        "status": "staged",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "source": safe_source,
+        "outputs": [],
+        "platform": "wechat_channels",
+        "content_id": str(item["id"]),
+        "content_type": "video",
+        "canonical_url": safe_source,
+        "title": str(item["title"]),
+        "route": "wechat_channels_backend",
+        "output_dir": None,
+        "auto_resume": True,
+        "channel_object": frozen,
+        "parent_job_id": parent_job_id,
+    }
+    write_json(manifest_path, manifest)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": "staged",
+        "platform": "wechat_channels",
+        "manifest": archive_relative(root, manifest_path),
+    }
+
+
+def activate_staged_channel_content(manifest_path: Path, parent_job_id: str) -> dict:
+    lock_path = manifest_path.with_suffix(".json.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        manifest = read_json_if_valid(manifest_path) or {}
+        if manifest.get("parent_job_id") != parent_job_id:
+            raise ArchiveError("creator_child_identity_conflict", "冻结子任务父任务身份冲突。", 69)
+        if manifest.get("status") == "staged":
+            manifest.update({"status": "downloading", "updated_at": utc_now()})
+            write_json(manifest_path, manifest)
+        return manifest
+    finally:
+        os.close(descriptor)
+
+
+def adopt_legacy_frozen_channel_content(
+    manifest_path: Path,
+    item: dict,
+    parent_job_id: str,
+) -> dict:
+    lock_path = manifest_path.with_suffix(".json.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        manifest = read_json_if_valid(manifest_path) or {}
+        frozen = item.get("payload") or {}
+        if (
+            manifest.get("platform") != "wechat_channels"
+            or str(manifest.get("content_id") or "") != str(item.get("id") or "")
+            or not isinstance(frozen, dict)
+            or not frozen
+        ):
+            raise ArchiveError("creator_child_identity_conflict", "旧版冻结子任务身份冲突。", 69)
+        existing_parent = manifest.get("parent_job_id")
+        if existing_parent and existing_parent != parent_job_id:
+            raise ArchiveError("creator_child_identity_conflict", "旧版冻结子任务父任务身份冲突。", 69)
+        submitted = bool(manifest.get("upstream_task_ids"))
+        manifest.update(
+            {
+                "parent_job_id": parent_job_id,
+                "channel_object": frozen,
+                "title": str(item.get("title") or manifest.get("title") or "未命名视频"),
+                "route": "wechat_channels_backend",
+                "status": manifest.get("status") if submitted else "downloading",
+                "updated_at": utc_now(),
+            }
+        )
+        write_json(manifest_path, manifest)
+        return manifest
+    finally:
+        os.close(descriptor)
+
+
 def submit_official_batch(url: str, root: Path) -> dict:
     normalized, platform = submission_url(url)
     if platform != "wechat_official_account":
@@ -716,8 +834,12 @@ def process_official_article(manifest: dict, manifest_path: Path, root: Path) ->
         raise ArchiveError("article_media_incomplete", "公众号文章存在未取得配图，内容包未完成。", 69)
     return finalize_official_article(manifest, manifest_path, root, article["canonical_url"])
 
-
-def process_content_job(manifest_path: Path, root: Path) -> dict:
+def _process_content_job_unlocked(
+    manifest_path: Path,
+    root: Path,
+    deadline: float | None = None,
+    start_only: bool = False,
+) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("status") not in {"queued", "downloading", "transcribing"}:
         return manifest
@@ -725,7 +847,9 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
     write_json(manifest_path, manifest)
     try:
         if manifest.get("platform") == "wechat_channels":
-            return process_channel_content(manifest, manifest_path, root)
+            if start_only and manifest.get("upstream_task_ids"):
+                return manifest
+            return process_channel_content(manifest, manifest_path, root, deadline=deadline)
         if manifest.get("platform") == "wechat_official_account":
             return process_official_article(manifest, manifest_path, root)
         if manifest.get("platform") == "bilibili":
@@ -736,7 +860,18 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
             return process_transparent_video(manifest, manifest_path, root)
         raise ArchiveError("platform_not_implemented", f"平台尚未接入 worker：{manifest.get('platform')}", 69)
     except Exception as exc:
-        if isinstance(exc, ArchiveError) and exc.code in {"reauthentication_required", "channels_authorization_required"}:
+        channels_transient = isinstance(exc, ArchiveError) and exc.code in {
+            "channels_backend_unavailable",
+            "channels_backend_error",
+            "channels_share_resolve_failed",
+            "channels_task_create_failed",
+        }
+        recovery_expired = deadline is not None and isinstance(exc, ArchiveError) and exc.code == "recovery_window_expired"
+        if isinstance(exc, ArchiveError) and (
+            exc.code in {"reauthentication_required", "channels_authorization_required"}
+            or channels_transient
+            or recovery_expired
+        ):
             platform = str(manifest.get("platform"))
             cookie_jar = platform_cookie_jar(platform)
             channels = platform == "wechat_channels"
@@ -756,6 +891,7 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
             )
             manifest.pop("completed_at", None)
             manifest.pop("failed_stage", None)
+            manifest["last_retry_error"] = {"code": exc.code, "message": str(exc)}
             write_json(manifest_path, manifest)
             return manifest
         failed_stage = "transcription" if manifest.get("status") == "transcribing" else "downloading"
@@ -770,6 +906,37 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
         )
         write_json(manifest_path, manifest)
         return manifest
+
+def process_content_job(
+    manifest_path: Path,
+    root: Path,
+    resume_waiting: bool = False,
+    deadline: float | None = None,
+    start_only: bool = False,
+) -> dict:
+    lock_path = manifest_path.with_suffix(".json.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return read_json_if_valid(manifest_path) or {}
+        if resume_waiting:
+            manifest = read_json_if_valid(manifest_path) or {}
+            if manifest.get("status") in {"waiting_for_authorization", "waiting_for_reauthentication"}:
+                manifest.update({"status": "queued", "updated_at": utc_now()})
+                manifest.pop("next_action", None)
+                manifest.pop("error", None)
+                write_json(manifest_path, manifest)
+        return _process_content_job_unlocked(
+            manifest_path,
+            root,
+            deadline=deadline,
+            start_only=start_only,
+        )
+    finally:
+        os.close(descriptor)
 
 
 def parse_utc_timestamp(value: object) -> datetime | None:
@@ -789,88 +956,281 @@ def read_json_if_valid(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def resume_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> tuple[dict, int]:
+def requeue_waiting_content_job(manifest_path: Path, frozen_object: dict | None = None) -> bool:
+    lock_path = manifest_path.with_suffix(".json.lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        manifest = read_json_if_valid(manifest_path) or {}
+        if manifest.get("platform") != "wechat_channels" or manifest.get("status") not in {
+            "waiting_for_authorization",
+            "waiting_for_reauthentication",
+        }:
+            return False
+        if not manifest.get("channel_object"):
+            if not isinstance(frozen_object, dict) or not frozen_object:
+                return False
+            manifest["channel_object"] = frozen_object
+        manifest.update({"status": "queued", "updated_at": utc_now()})
+        manifest.pop("next_action", None)
+        manifest.pop("error", None)
+        write_json(manifest_path, manifest)
+        return True
+    finally:
+        os.close(descriptor)
+
+
+def _resume_creator_batch_children_unlocked(manifest: dict, manifest_path: Path, root: Path) -> tuple[dict, int]:
     resumed = 0
+    items_by_child = {
+        str(item.get("child_job_id")): item
+        for item in ((manifest.get("inventory") or {}).get("items") or [])
+        if item.get("child_job_id")
+    }
     for child_id in manifest.get("child_job_ids") or []:
         child_path = root / "jobs" / str(child_id) / "manifest.json"
-        child = read_json_if_valid(child_path)
-        if not child or child.get("platform") != "wechat_channels":
-            continue
-        if child.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}:
-            continue
-        child.update({"status": "queued", "updated_at": utc_now()})
-        child.pop("next_action", None)
-        child.pop("error", None)
-        write_json(child_path, child)
-        resumed += 1
+        item = items_by_child.get(str(child_id)) or {}
+        frozen = item.get("payload") if isinstance(item, dict) else None
+        if requeue_waiting_content_job(child_path, frozen_object=frozen):
+            resumed += 1
     if resumed:
         manifest.pop("next_action", None)
         manifest.pop("error", None)
         manifest.pop("session_retry_after", None)
-    return refresh_creator_batch(manifest, manifest_path, root), resumed
+    return _refresh_creator_batch_unlocked(manifest, manifest_path, root), resumed
 
 
-def resume_waiting_channel_creators_once(root: Path, retry_interval: int = 900) -> int:
-    """Low-frequency, non-UI retry for one waiting creator task.
+def resume_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> tuple[dict, int]:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or manifest, 0
+    try:
+        current = read_json_if_valid(manifest_path) or manifest
+        return _resume_creator_batch_children_unlocked(current, manifest_path, root)
+    finally:
+        os.close(descriptor)
+
+
+def _resume_waiting_channel_creators_unlocked(
+    root: Path,
+    retry_interval: int = 900,
+    ignore_retry_after: bool = False,
+    deadline: float | None = None,
+) -> int:
+    """Low-frequency, non-UI retry for the waiting creator backlog.
 
     The retry only calls the existing local Channels backend. It never opens or
-    controls WeChat. A still-unavailable session is retried no more than once
-    per ``retry_interval`` seconds.
+    controls WeChat. When a short realtime window becomes available, every due
+    task is advanced in the same pass. Probing stops as soon as that realtime
+    window is unavailable again.
     """
     if retry_interval < 60:
         raise ArchiveError("invalid_retry_interval", "视频号会话重试间隔不能小于 60 秒。")
     now = datetime.now(timezone.utc)
-    for manifest_path in sorted((root / "jobs").glob("batch-????????T??????Z-????????/manifest.json")):
-        manifest = read_json_if_valid(manifest_path)
-        if not manifest:
+    resumed_total = 0
+    manifest_paths = list((root / "jobs").glob("batch-????????T??????Z-????????/manifest.json"))
+
+    def recovery_priority(path: Path) -> tuple[int, str]:
+        candidate = read_json_if_valid(path) or {}
+        frozen = bool(candidate.get("selection") or candidate.get("child_job_ids"))
+        return (0 if frozen else 1, str(path))
+
+    for manifest_path in sorted(manifest_paths, key=recovery_priority):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        descriptor = acquire_creator_batch_lock(manifest_path)
+        if descriptor is None:
             continue
-        if (
-            manifest.get("kind") != "creator_batch"
-            or manifest.get("platform") != "wechat_channels"
-            or manifest.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}
-        ):
-            continue
-        retry_after = parse_utc_timestamp(manifest.get("session_retry_after"))
-        if retry_after is not None and retry_after > now:
-            continue
-        source = str(manifest.get("source") or "")
-        selected = bool(manifest.get("selection") or manifest.get("child_job_ids"))
-        if not selected and not source:
-            continue
-        next_retry = (now + timedelta(seconds=retry_interval)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         try:
-            manifest["session_retry_after"] = next_retry
-            write_json(manifest_path, manifest)
-            if selected:
-                _, resumed = resume_creator_batch_children(manifest, manifest_path, root)
-                return 1 if resumed else 0
-            result = inspect_channel_creator(
-                source,
-                root,
-                existing_job=(str(manifest.get("job_id") or manifest_path.parent.name), manifest_path.parent, manifest),
-            )
-        except Exception as exc:
+            manifest = read_json_if_valid(manifest_path)
+            if not manifest:
+                continue
+            if (
+                manifest.get("kind") != "creator_batch"
+                or manifest.get("platform") != "wechat_channels"
+                or manifest.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}
+            ):
+                continue
+            retry_after = parse_utc_timestamp(manifest.get("session_retry_after"))
+            if not ignore_retry_after and retry_after is not None and retry_after > now:
+                continue
+            source = str(manifest.get("source") or "")
+            selected = bool(manifest.get("selection") or manifest.get("child_job_ids"))
+            if not selected and not source:
+                continue
+            next_retry = (now + timedelta(seconds=retry_interval)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             try:
-                refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
-                refreshed["session_retry_after"] = next_retry
-                refreshed["last_retry_error"] = {
-                    "code": getattr(exc, "code", "unexpected_error"),
-                    "message": str(exc),
-                }
-                write_json(manifest_path, refreshed)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                pass
-            return 0
-        if result.get("status") != "waiting_for_authorization":
-            return 1
-        try:
-            refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["session_retry_after"] = next_retry
+                write_json(manifest_path, manifest)
+                if selected:
+                    _, resumed_children = _resume_creator_batch_children_unlocked(manifest, manifest_path, root)
+                    if resumed_children:
+                        resumed_total += 1
+                    continue
+                result = _inspect_channel_creator_unlocked(
+                    source,
+                    root,
+                    existing_job=(str(manifest.get("job_id") or manifest_path.parent.name), manifest_path.parent, manifest),
+                    deadline=deadline,
+                )
+            except Exception as exc:
+                try:
+                    refreshed = read_json_if_valid(manifest_path) or manifest
+                    refreshed["session_retry_after"] = next_retry
+                    refreshed["last_retry_error"] = {
+                        "code": getattr(exc, "code", "unexpected_error"),
+                        "message": str(exc),
+                    }
+                    write_json(manifest_path, refreshed)
+                except OSError:
+                    pass
+                return resumed_total
+            if result.get("status") in {
+                "awaiting_download_count",
+                "submitting",
+                "processing",
+                "completed",
+                "completed_with_failures",
+            }:
+                resumed_total += 1
+                continue
+            refreshed = read_json_if_valid(manifest_path) or manifest
             refreshed["session_retry_after"] = next_retry
             write_json(manifest_path, refreshed)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            pass
-        return 0
-    return 0
+            return resumed_total
+        finally:
+            os.close(descriptor)
+    return resumed_total
+
+
+def resume_waiting_channel_creators_once(
+    root: Path,
+    retry_interval: int = 900,
+    ignore_retry_after: bool = False,
+    deadline: float | None = None,
+) -> int:
+    lock_path = root / "state" / "channels-recovery.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(lock_path.parent, 0o700)
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if ignore_retry_after:
+                raise ArchiveError("recovery_window_busy", "已有视频号恢复流程正在处理任务，请稍后重试。", 75)
+            return 0
+        return _resume_waiting_channel_creators_unlocked(root, retry_interval, ignore_retry_after, deadline)
+    finally:
+        os.close(descriptor)
+
+
+def resume_waiting_channel_content(root: Path, deadline: float | None = None) -> int:
+    resumed = 0
+    pattern = "content-????????T??????Z-????????/manifest.json"
+    for manifest_path in sorted((root / "jobs").glob(pattern)):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        manifest = read_json_if_valid(manifest_path)
+        if not manifest or manifest.get("platform") != "wechat_channels":
+            continue
+        waiting = manifest.get("status") in {"waiting_for_authorization", "waiting_for_reauthentication"}
+        frozen_unsubmitted = (
+            manifest.get("status") in {"queued", "downloading"}
+            and bool(manifest.get("channel_object"))
+            and not manifest.get("upstream_task_ids")
+        )
+        if not waiting and not frozen_unsubmitted:
+            continue
+        result = process_content_job(
+            manifest_path,
+            root,
+            resume_waiting=True,
+            deadline=deadline,
+            start_only=True,
+        )
+        if result.get("status") in {"downloading", "transcribing", "completed"}:
+            resumed += 1
+    return resumed
+
+
+def recover_channel_session(
+    root: Path,
+    timeout: int = 300,
+    poll_interval: int = 5,
+    started_at: float | None = None,
+    cleanup_reserve: int = 0,
+) -> dict:
+    """Wait for one user-opened Channels page, then drain the waiting backlog."""
+    if timeout < 10 or timeout > 900:
+        raise ArchiveError("invalid_recovery_timeout", "视频号恢复窗口必须在 10 到 900 秒之间。")
+    if poll_interval < 1 or poll_interval > 10:
+        raise ArchiveError("invalid_recovery_poll_interval", "视频号恢复检测间隔必须在 1 到 10 秒之间。")
+    if cleanup_reserve < 0 or cleanup_reserve >= timeout:
+        raise ArchiveError("invalid_cleanup_reserve", "恢复窗口清理预留时间无效。")
+    elapsed = max(0.0, time.time() - started_at) if started_at is not None else 0.0
+    remaining_budget = timeout - cleanup_reserve - elapsed
+    if remaining_budget <= 0:
+        return {
+            "ok": False,
+            "platform": "wechat_channels",
+            "status": "recovery_window_expired",
+            "resumed_creator_batches": 0,
+            "resumed_content_jobs": 0,
+        }
+    deadline = time.monotonic() + remaining_budget
+    probe_keyword = f"__hermes_session_probe_{uuid.uuid4().hex}__"
+    while True:
+        status = channel_session_status(root, probe_keyword=probe_keyword, deadline=deadline)
+        if status.get("ok"):
+            if time.monotonic() >= deadline:
+                return {
+                    "ok": False,
+                    "platform": "wechat_channels",
+                    "status": "recovery_window_expired",
+                    "resumed_creator_batches": 0,
+                    "resumed_content_jobs": 0,
+                }
+            resumed_batches = resume_waiting_channel_creators_once(
+                root,
+                retry_interval=60,
+                ignore_retry_after=True,
+                deadline=deadline,
+            )
+            resumed_content = resume_waiting_channel_content(root, deadline=deadline)
+            if time.monotonic() >= deadline:
+                return {
+                    "ok": False,
+                    "platform": "wechat_channels",
+                    "status": "recovery_window_expired",
+                    "resumed_creator_batches": resumed_batches,
+                    "resumed_content_jobs": resumed_content,
+                }
+            return {
+                "ok": True,
+                "platform": "wechat_channels",
+                "status": "realtime_window_ready",
+                "resumed_creator_batches": resumed_batches,
+                "resumed_content_jobs": resumed_content,
+                "last_realtime_ready_at": status.get("last_realtime_ready_at"),
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "ok": False,
+                "platform": "wechat_channels",
+                "status": "recovery_window_expired",
+                "resumed_creator_batches": 0,
+                "resumed_content_jobs": 0,
+            }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            continue
+        time.sleep(min(poll_interval, remaining))
 
 
 def content_worker_once(root: Path) -> tuple[dict, bool]:
@@ -1081,11 +1441,7 @@ def resume_job(job_id: str, root: Path) -> dict:
 
     if manifest.get("kind") != "content":
         raise ArchiveError("job_not_resumable", "该视频号任务类型不支持手动恢复。", 66)
-    manifest.update({"status": "queued", "updated_at": utc_now()})
-    manifest.pop("next_action", None)
-    manifest.pop("error", None)
-    write_json(manifest_path, manifest)
-    manifest = process_content_job(manifest_path, root)
+    manifest = process_content_job(manifest_path, root, resume_waiting=True)
     return {"ok": manifest.get("status") != "failed", "job_id": job_id, "status": manifest["status"], "platform": manifest.get("platform")}
 
 
@@ -1609,7 +1965,7 @@ def inspect_creator(url: str, root: Path) -> dict:
     }
 
 
-def refresh_creator_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
+def _refresh_creator_batch_unlocked(manifest: dict, manifest_path: Path, root: Path) -> dict:
     processing = completed = failed = waiting_authorization = waiting_reauthentication = 0
     for item in (manifest.get("inventory") or {}).get("items") or []:
         child_id = item.get("child_job_id")
@@ -1663,35 +2019,81 @@ def refresh_creator_batch(manifest: dict, manifest_path: Path, root: Path) -> di
     return manifest
 
 
-def submit_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> dict:
+def _submit_creator_batch_children_unlocked(manifest: dict, manifest_path: Path, root: Path) -> dict:
     limit = int((manifest.get("selection") or {}).get("limit") or 0)
     items = (manifest.get("inventory") or {}).get("items") or []
+    parent_job_id = str(manifest.get("job_id") or manifest_path.parent.name)
     for item in items[:limit]:
-        if item.get("child_job_id"):
+        existing_child_id = str(item.get("child_job_id") or "")
+        if existing_child_id and manifest.get("platform") != "wechat_channels":
             continue
-        child = submit_content(str(item["url"]), root)
-        child_path = root / str(child["manifest"])
-        child_manifest = json.loads(child_path.read_text(encoding="utf-8"))
         if manifest.get("platform") == "wechat_channels":
-            obj = item.get("payload") or {}
-            child_manifest.update(
-                {
-                    "status": "downloading",
-                    "title": item["title"],
-                    "content_id": item["id"],
-                    "route": "wechat_channels_backend",
-                    "channel_object": obj,
+            deterministic_id = frozen_channel_child_job_id(parent_job_id, item)
+            if existing_child_id and existing_child_id != deterministic_id:
+                child_path = root / "jobs" / existing_child_id / "manifest.json"
+                adopted = adopt_legacy_frozen_channel_content(child_path, item, parent_job_id)
+                child = {
+                    "job_id": existing_child_id,
+                    "manifest": archive_relative(root, child_path),
+                    "status": adopted.get("status"),
                 }
-            )
-            write_json(child_path, child_manifest)
-        elif manifest.get("platform") == "douyin":
+            else:
+                child = submit_frozen_channel_content(item, root, parent_job_id)
+        else:
+            child = submit_content(str(item["url"]), root)
+        if manifest.get("platform") == "douyin":
+            child_path = root / str(child["manifest"])
+            child_manifest = json.loads(child_path.read_text(encoding="utf-8"))
             child_manifest["douyin_media"] = {"content_id": item["id"]}
             write_json(child_path, child_manifest)
+        if existing_child_id and existing_child_id != child["job_id"]:
+            raise ArchiveError("creator_child_identity_conflict", "父任务中的冻结子任务身份冲突。", 69)
         item.update({"child_job_id": child["job_id"], "result": "processing"})
-        manifest["child_job_ids"].append(child["job_id"])
+        if child["job_id"] not in manifest["child_job_ids"]:
+            manifest["child_job_ids"].append(child["job_id"])
         manifest.update({"status": "submitting", "updated_at": utc_now()})
         write_json(manifest_path, manifest)
-    return refresh_creator_batch(manifest, manifest_path, root)
+        if manifest.get("platform") == "wechat_channels":
+            activate_staged_channel_content(root / str(child["manifest"]), parent_job_id)
+    return _refresh_creator_batch_unlocked(manifest, manifest_path, root)
+
+
+def creator_batch_lock_path(manifest_path: Path) -> Path:
+    return manifest_path.with_suffix(".json.batch.lock")
+
+
+def acquire_creator_batch_lock(manifest_path: Path) -> int | None:
+    lock_path = creator_batch_lock_path(manifest_path)
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.chmod(lock_path, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def refresh_creator_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or manifest
+    try:
+        latest = read_json_if_valid(manifest_path) or manifest
+        return _refresh_creator_batch_unlocked(latest, manifest_path, root)
+    finally:
+        os.close(descriptor)
+
+
+def submit_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or manifest
+    try:
+        current = read_json_if_valid(manifest_path) or manifest
+        return _submit_creator_batch_children_unlocked(current, manifest_path, root)
+    finally:
+        os.close(descriptor)
 
 
 def download_creator_plan(job_id: str, limit: int, root: Path) -> dict:
@@ -1700,16 +2102,22 @@ def download_creator_plan(job_id: str, limit: int, root: Path) -> dict:
     manifest_path = root / "jobs" / job_id / "manifest.json"
     if not manifest_path.is_file():
         raise ArchiveError("job_not_found", "没有找到该任务。", 66)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("kind") != "creator_batch" or manifest.get("status") != "awaiting_download_count":
-        raise ArchiveError("job_not_waiting_for_count", "该任务当前不在等待下载数量。", 66)
-    items = (manifest.get("inventory") or {}).get("items") or []
-    if limit < 1 or limit > len(items):
-        raise ArchiveError("invalid_download_count", f"下载数量应在 1 到 {len(items)} 之间。")
-    manifest.update({"status": "submitting", "updated_at": utc_now(), "selection": {"limit": limit, "order": "newest"}})
-    manifest.pop("next_action", None)
-    write_json(manifest_path, manifest)
-    manifest = submit_creator_batch_children(manifest, manifest_path, root)
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        raise ArchiveError("job_busy", "该任务正在提交，请稍后查询同一任务状态。", 75)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("kind") != "creator_batch" or manifest.get("status") != "awaiting_download_count":
+            raise ArchiveError("job_not_waiting_for_count", "该任务当前不在等待下载数量。", 66)
+        items = (manifest.get("inventory") or {}).get("items") or []
+        if limit < 1 or limit > len(items):
+            raise ArchiveError("invalid_download_count", f"下载数量应在 1 到 {len(items)} 之间。")
+        manifest.update({"status": "submitting", "updated_at": utc_now(), "selection": {"limit": limit, "order": "newest"}})
+        manifest.pop("next_action", None)
+        write_json(manifest_path, manifest)
+        manifest = _submit_creator_batch_children_unlocked(manifest, manifest_path, root)
+    finally:
+        os.close(descriptor)
     return {
         "ok": True,
         "job_id": job_id,
@@ -1825,14 +2233,29 @@ def download_douyin_inventory_fallback(manifest: dict, work_dir: Path) -> tuple[
     }, target
 
 
-def channels_api(path: str, *, query: dict | None = None, body: dict | None = None) -> dict:
+def recovery_timeout(deadline: float | None, maximum: float = 20.0) -> float:
+    if deadline is None:
+        return maximum
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ArchiveError("recovery_window_expired", "视频号恢复窗口已结束，未完成任务保持原状态。", 69)
+    return min(maximum, max(0.1, remaining))
+
+
+def channels_api(
+    path: str,
+    *,
+    query: dict | None = None,
+    body: dict | None = None,
+    deadline: float | None = None,
+) -> dict:
     url = CHANNELS_API_BASE + path
     if query:
         url += "?" + urlencode(query)
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
     request = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST" if data else "GET")
     try:
-        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=recovery_timeout(deadline)) as response:
             payload = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ArchiveError("channels_backend_unavailable", f"视频号采集后端不可用：{exc}", 69) from exc
@@ -1863,7 +2286,7 @@ def safe_channel_name(value: str, fallback: str) -> str:
     return (re.sub(r"[\\/:\x00-\x1f]", "_", value).strip(" .")[:180] or fallback)
 
 
-def resolve_channel_share_metadata(share_url: str) -> dict:
+def resolve_channel_share_metadata(share_url: str, deadline: float | None = None) -> dict:
     short_uri = urlsplit(share_url).path.rstrip("/").rsplit("/", 1)[-1]
     page_url = f"https://channels.weixin.qq.com/finder-preview/pages/sph?id={short_uri}"
     request = Request(
@@ -1873,7 +2296,7 @@ def resolve_channel_share_metadata(share_url: str) -> dict:
         method="POST",
     )
     try:
-        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
+        with build_opener(ProxyHandler({})).open(request, timeout=recovery_timeout(deadline)) as response:
             payload = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ArchiveError("channels_share_resolve_failed", f"视频号分享链接解析失败：{exc}", 69) from exc
@@ -1889,8 +2312,8 @@ def resolve_channel_share_metadata(share_url: str) -> dict:
     }
 
 
-def resolve_channel_share_eid(share_url: str) -> str:
-    return str(resolve_channel_share_metadata(share_url)["eid"])
+def resolve_channel_share_eid(share_url: str, deadline: float | None = None) -> str:
+    return str(resolve_channel_share_metadata(share_url, deadline=deadline)["eid"])
 
 
 def recent_channel_author(captured_after_ms: int) -> dict | None:
@@ -1922,13 +2345,15 @@ def recent_channel_author(captured_after_ms: int) -> dict | None:
     return {"username": rows[0][0], "nickname": rows[0][1], "avatar": rows[0][2], "signature": ""}
 
 
-def resolve_channel_author_from_url(share_url: str) -> dict:
+def resolve_channel_author_from_url(share_url: str, deadline: float | None = None) -> dict:
     """Resolve a Channels share URL without opening or controlling WeChat."""
     safe_url = validate_https_url(share_url, {"weixin.qq.com", "channels.weixin.qq.com"})
-    metadata = resolve_channel_share_metadata(safe_url)
+    metadata = resolve_channel_share_metadata(safe_url, deadline=deadline)
     public_avatar = str(metadata.get("avatar") or "").strip()
     try:
-        profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": metadata["eid"]}))
+        profile = channels_payload_data(
+            channels_api("/api/channels/feed/profile", query={"eid": metadata["eid"]}, deadline=deadline)
+        )
         contact = (profile.get("object") or {}).get("contact") or {}
         if contact.get("username"):
             public_nickname = str(metadata.get("nickname") or "").strip()
@@ -1958,7 +2383,7 @@ def resolve_channel_author_from_url(share_url: str) -> dict:
                 "公开分享页缺少可核对的博主头像，不能只按昵称自动绑定；请用户在手机端选择正确博主。",
                 66,
             )
-        search = search_channel_author(nickname)
+        search = search_channel_author(nickname, deadline=deadline)
         exact = [candidate for candidate in search["candidates"] if candidate.get("nickname") == nickname]
         avatar_matches = [candidate for candidate in exact if avatar and candidate.get("avatar") == avatar]
         if avatar and exact and not avatar_matches:
@@ -1980,8 +2405,10 @@ def resolve_channel_author_from_url(share_url: str) -> dict:
     )
 
 
-def search_channel_author(query: str) -> dict:
-    data = channels_payload_data(channels_api("/api/channels/contact/search", query={"keyword": query}))
+def search_channel_author(query: str, deadline: float | None = None) -> dict:
+    data = channels_payload_data(
+        channels_api("/api/channels/contact/search", query={"keyword": query}, deadline=deadline)
+    )
     candidates = []
     for item in data.get("infoList") or []:
         contact = item.get("contact") or {}
@@ -2006,7 +2433,13 @@ def download_channel_url(url: str, root: Path) -> dict:
         manifest = process_content_job(manifest_path, root)
     except ArchiveError as exc:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        waiting = exc.code == "channels_authorization_required"
+        waiting = exc.code in {
+            "channels_authorization_required",
+            "channels_backend_unavailable",
+            "channels_backend_error",
+            "channels_share_resolve_failed",
+            "channels_task_create_failed",
+        }
         manifest.update(
             {
                 "status": "waiting_for_authorization" if waiting else "failed",
@@ -2033,7 +2466,12 @@ def ordinary_channel_video(obj: dict) -> bool:
     return desc.get("mediaType") == CHANNEL_VIDEO_MEDIA_TYPE and bool(desc.get("media")) and not obj.get("liveInfo")
 
 
-def submit_channel_objects(objects: list[dict], output_dir: Path) -> tuple[list[dict], list[int]]:
+
+def submit_channel_objects(
+    objects: list[dict],
+    output_dir: Path,
+    deadline: float | None = None,
+) -> tuple[list[dict], list[int]]:
     if not objects:
         return [], []
     result = channels_api(
@@ -2049,6 +2487,7 @@ def submit_channel_objects(objects: list[dict], output_dir: Path) -> tuple[list[
                 for obj in objects
             ]
         },
+        deadline=deadline,
     )
     task_items = result.get("tasks") or []
     records = []
@@ -2079,22 +2518,30 @@ def submit_channel_objects(objects: list[dict], output_dir: Path) -> tuple[list[
     return records, task_ids
 
 
-def process_channel_content(manifest: dict, manifest_path: Path, root: Path) -> dict:
+def process_channel_content(
+    manifest: dict,
+    manifest_path: Path,
+    root: Path,
+    deadline: float | None = None,
+) -> dict:
     work_dir = manifest_path.parent / "work"
     task_ids = manifest.get("upstream_task_ids") or []
     if not task_ids:
-        obj = manifest.pop("channel_object", None) or {}
+        obj = manifest.get("channel_object") or {}
         if not obj:
             safe_url = validate_https_url(str(manifest["source"]), {"weixin.qq.com", "channels.weixin.qq.com"})
-            eid = resolve_channel_share_eid(safe_url)
-            profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": eid}))
+            eid = resolve_channel_share_eid(safe_url, deadline=deadline)
+            profile = channels_payload_data(
+                channels_api("/api/channels/feed/profile", query={"eid": eid}, deadline=deadline)
+            )
             obj = profile.get("object") or {}
         if not ordinary_channel_video(obj):
             raise ArchiveError("channel_video_not_found", "分享链接中没有找到普通视频。")
-        records, task_ids = submit_channel_objects([obj], work_dir)
+        records, task_ids = submit_channel_objects([obj], work_dir, deadline=deadline)
         if not task_ids:
             raise ArchiveError("channels_task_create_failed", records[0].get("message") or "创建视频下载任务失败。", 69)
         description = str((obj.get("objectDesc") or {}).get("description") or "未命名视频号视频")
+        manifest.pop("channel_object", None)
         manifest.update(
             {
                 "status": "downloading",
@@ -2360,6 +2807,63 @@ def channel_creator_registry_path(root: Path) -> Path:
     return root / "state" / "channels-creators.json"
 
 
+def channel_session_snapshot_path(root: Path) -> Path:
+    return root / "state" / "channels-session.json"
+
+
+def load_channel_session_snapshot(root: Path) -> dict:
+    snapshot = read_json_if_valid(channel_session_snapshot_path(root)) or {}
+    realtime_status = snapshot.get("realtime_status")
+    if not isinstance(realtime_status, str) or not realtime_status:
+        realtime_status = "unknown"
+    registered_creators = snapshot.get("registered_creators")
+    if not isinstance(registered_creators, int) or isinstance(registered_creators, bool) or registered_creators < 0:
+        registered_creators = 0
+    return {
+        "schema_version": 1,
+        "updated_at": snapshot.get("updated_at"),
+        "realtime_status": realtime_status,
+        "last_ready_at": snapshot.get("last_ready_at"),
+        "registered_creators": registered_creators,
+    }
+
+
+def save_channel_session_snapshot(root: Path, realtime_status: str, registered_creators: int) -> dict:
+    path = channel_session_snapshot_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        with os.fdopen(descriptor, "r+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            previous = load_channel_session_snapshot(root)
+            now = utc_now()
+            snapshot = {
+                "schema_version": 1,
+                "updated_at": now,
+                "realtime_status": realtime_status,
+                "last_ready_at": now if realtime_status == "ready" else previous.get("last_ready_at"),
+                "registered_creators": registered_creators,
+            }
+            private_atomic_write(path, (json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode())
+            return snapshot
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def try_save_channel_session_snapshot(root: Path, realtime_status: str, registered_creators: int) -> dict:
+    try:
+        return save_channel_session_snapshot(root, realtime_status, registered_creators)
+    except OSError:
+        return load_channel_session_snapshot(root)
+
+
 def load_channel_creator_registry(root: Path) -> dict:
     path = channel_creator_registry_path(root)
     if not path.is_file():
@@ -2415,19 +2919,23 @@ def registered_channel_creator(root: Path, source: str) -> dict | None:
     return dict(creator) if isinstance(creator, dict) else None
 
 
-def resolve_channel_author(author: str, root: Path | None = None) -> dict:
+def resolve_channel_author(
+    author: str,
+    root: Path | None = None,
+    deadline: float | None = None,
+) -> dict:
     root = root or archive_root()
     if author.startswith("https://"):
         registered = registered_channel_creator(root, author)
         if registered:
             return registered
-        creator = resolve_channel_author_from_url(author)
+        creator = resolve_channel_author_from_url(author, deadline=deadline)
         register_channel_creator(root, author, creator)
         return creator
     if author.endswith("@finder"):
         registered = load_channel_creator_registry(root)["creators"].get(author)
         return dict(registered) if isinstance(registered, dict) else {"username": author, "nickname": ""}
-    search = search_channel_author(author)
+    search = search_channel_author(author, deadline=deadline)
     candidates = search["candidates"]
     exact = [candidate for candidate in candidates if candidate["nickname"] == author]
     choices = exact or candidates
@@ -2439,15 +2947,17 @@ def resolve_channel_author(author: str, root: Path | None = None) -> dict:
     return choices[0]
 
 
-def discover_channel_author(selected: dict) -> tuple[list[list[dict]], int]:
+def discover_channel_author(selected: dict, deadline: float | None = None) -> tuple[list[list[dict]], int]:
     pages = []
     discovered = 0
     next_marker = ""
     while True:
+        recovery_timeout(deadline)
         page = channels_payload_data(
             channels_api(
                 "/api/channels/contact/feed/list",
                 query={"username": selected["username"], "next_marker": next_marker},
+                deadline=deadline,
             )
         )
         objects = page.get("object") or []
@@ -2503,12 +3013,18 @@ def inspect_channel_author(author: str, root: Path) -> dict:
     }
 
 
-def inspect_channel_creator(author: str, root: Path, *, existing_job: tuple[str, Path, dict] | None = None) -> dict:
+def _inspect_channel_creator_unlocked(
+    author: str,
+    root: Path,
+    *,
+    existing_job: tuple[str, Path, dict] | None = None,
+    deadline: float | None = None,
+) -> dict:
     job_id, job_dir, manifest = existing_job or new_job(root, "batch", author)
     manifest.update({"kind": "creator_batch", "platform": "wechat_channels"})
     try:
-        selected = resolve_channel_author(author, root)
-        pages, _ = discover_channel_author(selected)
+        selected = resolve_channel_author(author, root, deadline=deadline)
+        pages, _ = discover_channel_author(selected, deadline=deadline)
         objects = [obj for page in pages for obj in page]
         if not objects:
             raise ArchiveError("creator_inventory_empty", "该视频号博主当前没有可下载视频。", 66)
@@ -2516,7 +3032,9 @@ def inspect_channel_creator(author: str, root: Path, *, existing_job: tuple[str,
         retryable = exc.code in {
             "channels_authorization_required",
             "channels_backend_unavailable",
+            "channels_backend_error",
             "channels_share_resolve_failed",
+            "recovery_window_expired",
         }
         manifest.update(
             {
@@ -2580,6 +3098,52 @@ def inspect_channel_creator(author: str, root: Path, *, existing_job: tuple[str,
         "question": manifest["next_action"],
         "manifest": archive_relative(root, job_dir / "manifest.json"),
     }
+
+
+def inspect_channel_creator(
+    author: str,
+    root: Path,
+    *,
+    existing_job: tuple[str, Path, dict] | None = None,
+    deadline: float | None = None,
+) -> dict:
+    if existing_job is None:
+        return _inspect_channel_creator_unlocked(author, root, deadline=deadline)
+    job_id, job_dir, manifest = existing_job
+    manifest_path = job_dir / "manifest.json"
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        current = read_json_if_valid(manifest_path) or manifest
+        return {
+            "ok": current.get("status") != "failed",
+            "job_id": job_id,
+            "status": current.get("status"),
+            "platform": "wechat_channels",
+            "manifest": archive_relative(root, manifest_path),
+        }
+    try:
+        current = read_json_if_valid(manifest_path) or manifest
+        remains_unselected_waiting = (
+            current.get("status") in {"waiting_for_authorization", "waiting_for_reauthentication"}
+            and not current.get("selection")
+            and not current.get("child_job_ids")
+        )
+        if not remains_unselected_waiting:
+            return {
+                "ok": current.get("status") != "failed",
+                "job_id": job_id,
+                "status": current.get("status"),
+                "platform": "wechat_channels",
+                "manifest": archive_relative(root, manifest_path),
+            }
+        return _inspect_channel_creator_unlocked(
+            author,
+            root,
+            existing_job=(job_id, job_dir, current),
+            deadline=deadline,
+        )
+    finally:
+        os.close(descriptor)
 
 
 def download_channel_plan(job_id: str, limit: int, root: Path) -> dict:
@@ -3029,38 +3593,58 @@ def job_status(job_id: str, root: Path) -> dict:
     return {"ok": True, "job": manifest}
 
 
-def channel_session_status(root: Path | None = None) -> dict:
+def channel_session_status(
+    root: Path | None = None,
+    probe_keyword: str | None = None,
+    deadline: float | None = None,
+) -> dict:
     """Probe the existing local Channels session without opening WeChat."""
     root = root or archive_root()
+    registry = load_channel_creator_registry(root)
+    registered = len(registry["creators"])
+    keyword = probe_keyword or f"__hermes_session_probe_{uuid.uuid4().hex}__"
     try:
-        search_channel_author("__hermes_session_probe__")
+        search_channel_author(keyword, deadline=deadline)
     except ArchiveError as exc:
         if exc.code == "channels_authorization_required":
+            snapshot = try_save_channel_session_snapshot(root, "authorization_required", registered)
             return {
                 "ok": False,
                 "platform": "wechat_channels",
                 "status": "authorization_required",
-                "next_action": "请用户方便使用 Mac 时，在 Mac 微信中手动打开任一视频号链接以恢复会话。",
+                "realtime_status": "authorization_required",
+                "capabilities": {
+                    "realtime_author_search": False,
+                    "realtime_creator_feed": False,
+                    "registered_creator_lookup": registered > 0,
+                    "frozen_job_state": True,
+                },
+                "registered_creators": registered,
+                "last_realtime_ready_at": snapshot.get("last_ready_at"),
+                "next_action": "本地登记和冻结任务仍可使用；只有刷新最新作品或识别未登记博主时，才需要用户方便使用 Mac 时手动打开一次视频号链接。",
             }
+        try_save_channel_session_snapshot(root, "unavailable", registered)
         return {
             "ok": False,
             "platform": "wechat_channels",
             "status": "unavailable",
             "error": {"code": exc.code, "message": str(exc)},
         }
-    registry = load_channel_creator_registry(root)
-    registered = len(registry["creators"])
+    snapshot = try_save_channel_session_snapshot(root, "ready", registered)
     return {
         "ok": True,
         "platform": "wechat_channels",
         "status": "author_search_ready",
         "capabilities": {
             "author_search": True,
+            "realtime_author_search": True,
             "registered_creator_lookup": registered > 0,
             "creator_feed": False,
             "new_creator_resolution": False,
+            "frozen_job_state": True,
         },
         "registered_creators": registered,
+        "last_realtime_ready_at": snapshot.get("last_ready_at"),
         "note": "只证明博主搜索接口可用；分享链接资料和作品列表将在真实任务中分别验证。",
     }
 
@@ -3103,6 +3687,11 @@ def build_parser() -> argparse.ArgumentParser:
     cookie_import.add_argument("--browser", required=True, choices=("safari", "chrome"))
     resume = subparsers.add_parser("resume")
     resume.add_argument("--job-id", required=True)
+    recover_session = subparsers.add_parser("recover-channel-session")
+    recover_session.add_argument("--timeout", type=int, default=300)
+    recover_session.add_argument("--poll-interval", type=int, default=5)
+    recover_session.add_argument("--started-at", type=float)
+    recover_session.add_argument("--cleanup-reserve", type=int, default=0)
     subparsers.add_parser("channel-session-status")
     subparsers.add_parser("transcriber-status")
     subparsers.add_parser("content-worker-status")
@@ -3196,6 +3785,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "resume":
             require_enabled()
             result = resume_job(args.job_id, root)
+        elif args.action == "recover-channel-session":
+            require_enabled()
+            result = recover_channel_session(
+                root,
+                args.timeout,
+                args.poll_interval,
+                started_at=args.started_at,
+                cleanup_reserve=args.cleanup_reserve,
+            )
         elif args.action == "channel-session-status":
             require_enabled()
             result = channel_session_status(root)

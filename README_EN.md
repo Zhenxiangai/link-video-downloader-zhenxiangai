@@ -98,7 +98,7 @@ Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and 
 - Sending a Channels link authorizes processing that public link only; it does not authorize enabling capture, changing the proxy, or controlling WeChat. Routine work reuses the local session without capture. If the required session expires, the Job remains waiting. Later, while physically at the Mac, the user may explicitly start the temporary recovery listener and manually open the original link in WeChat. Capture is then stopped immediately and the previous network state is restored. Hermes never clicks, types, reads chats, or opens the content on the user's behalf.
 - A job keeps the same ID when it enters `waiting_for_authorization` or `waiting_for_reauthentication`.
 - Cookies, account credentials, browser profiles, CA private keys, and proxy snapshots never enter Git, content packages, manifests, or Hermes responses.
-- `channel-session-status=author_search_ready` proves only that author search is responding. New-link identity resolution and creator-feed access are verified by the real task and are never inferred from that probe.
+- `channel-session-status=author_search_ready` proves only that author search is responding. New-link identity resolution and creator-feed access are verified by the real task and are never inferred from that probe. A disconnected live window does not erase the private creator registry, frozen inventory, selected count, child Jobs, or captured download objects.
 
 ## Current acceptance status
 
@@ -110,7 +110,7 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 
 `v1.1.0` adds creator-history batches for WeChat Channels, Bilibili, and Douyin. It inventories the currently visible total without downloading, then archives and transcribes the newest user-confirmed count. Real small-batch acceptance covered 280 available Channels videos, 913 available Bilibili videos, and a Douyin creator inventory; each platform completed two videos and three transcript formats, with all 24 formal artifacts matching the manifest byte counts and SHA-256 hashes.
 
-`v1.2.0` adds conditional mobile-submitted Channels creator tasks, a private creator registry, low-frequency same-Job recovery, capability-graded session status, and removes all default WeChat UI automation and Computer Use setup. Automated tests cover these controls. At development acceptance time, the live search session had expired, so real new-creator inventory remains explicitly unverified until a user-present manual session recovery is performed.
+`v1.2.0` adds conditional mobile-submitted Channels creator tasks, a private creator registry, capability-graded session status, frozen same-Job recovery, and a bounded recovery window that drains all waiting work. It removes all default WeChat UI automation and Computer Use setup. Real new-creator acceptance resolved one public share, inventoried 702 visible items, froze the newest two, and completed both videos and all transcript artifacts without downloading any other history. The live page session later expired as expected; this release does not claim permanent login or background page reconnection.
 
 Future versions plan to add Xiaohongshu creator batches and WeChat Official Account article capture. This release does not claim either history-batch capability.
 

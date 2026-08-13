@@ -27,6 +27,34 @@ class BootstrapRemoteRoutingTests(unittest.TestCase):
         self.assertIn("enable-capture) enable_capture", self.source)
         self.assertIn("disable-capture) disable_capture", self.source)
 
+    def test_explicit_recovery_window_wraps_probe_in_capture_cleanup(self):
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("recover-channel-session) recover_channels_session", source)
+        self.assertIn("capture_python recover-channel-session", source)
+        self.assertIn("trap 'disable_capture", source)
+
+    def test_recovery_budget_starts_before_capture_and_reserves_cleanup_time(self):
+        body = self.function_body("recover_channels_session", "inspect_channel_author")
+        self.assertIn('started_at=$(date +%s)', body)
+        self.assertIn('--started-at "$started_at"', body)
+        self.assertIn('--cleanup-reserve 30', body)
+
+    def test_ephemeral_certificate_identity_is_recorded_before_generation(self):
+        body = self.function_body("enable_capture", "restore_proxy")
+        ephemeral = body.split('cert_name="wechat_archive_', 1)[1]
+        record = 'echo "cert_name=$cert_name" >>"$proxy_snapshot"'
+        generate = "api_post /api/proxy/certificate/generate"
+        self.assertIn(record, ephemeral)
+        self.assertLess(ephemeral.index(record), ephemeral.index(generate))
+
+    def test_certificate_cleanup_does_not_ignore_keychain_query_failure(self):
+        body = self.function_body("remove_capture_certificate", "unattended_ready")
+        self.assertNotIn("2>/dev/null || true)", body)
+        self.assertIn("security find-certificate -a -c \"$cert_name\"", body)
+        self.assertIn("security find-certificate -a \"$keychain\"", body)
+        self.assertIn("return 1", body)
+        self.assertLess(body.index("return 1"), body.index('rm -f "$backend_runtime/certs/'))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,7 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
             creator = archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
 
         self.assertEqual(creator["username"], "creator@finder")
-        api.assert_called_once_with("/api/channels/feed/profile", query={"eid": "eid-1"})
+        api.assert_called_once_with("/api/channels/feed/profile", query={"eid": "eid-1"}, deadline=None)
         run.assert_not_called()
 
     def test_direct_profile_same_nickname_allows_avatar_cdn_variant(self):
@@ -110,7 +110,7 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
             creator = archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
 
         self.assertEqual(creator["username"], "creator@finder")
-        search.assert_called_once_with("新博主")
+        search.assert_called_once_with("新博主", deadline=None)
         run.assert_not_called()
 
     def test_public_author_fallback_uses_avatar_to_disambiguate_same_name(self):
@@ -181,6 +181,21 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
             self.assertIn("手动打开", manifest["next_action"])
             self.assertNotIn("Hermes", manifest["next_action"])
 
+    def test_creator_feed_backend_error_is_persisted_as_resumable_job(self):
+        transient = archive.ArchiveError("channels_backend_error", "feed unavailable", 69)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                patch.object(archive, "resolve_channel_author", return_value=CREATOR),
+                patch.object(archive, "discover_channel_author", side_effect=transient),
+            ):
+                result = archive.inspect_channel_creator("https://weixin.qq.com/sph/new", root)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "waiting_for_authorization")
+            manifest = json.loads((root / result["manifest"]).read_text())
+            self.assertNotIn("completed_at", manifest)
+            self.assertEqual(manifest["error"]["code"], "channels_backend_error")
+
     def test_non_retryable_inventory_failure_is_persisted_with_job_id(self):
         failure = archive.ArchiveError("channel_author_selection_required", "ambiguous", 66)
         with tempfile.TemporaryDirectory() as temporary:
@@ -241,14 +256,21 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
                     "status": "waiting_for_authorization",
                     "selection": {"limit": 1, "order": "newest"},
                     "child_job_ids": [child_id],
-                    "inventory": {"items": [{"child_job_id": child_id}]},
+                    "inventory": {
+                        "items": [
+                            {
+                                "child_job_id": child_id,
+                                "payload": {"id": "child", "objectDesc": {"description": "child"}},
+                            }
+                        ]
+                    },
                 }
             )
             archive.write_json(job_dir / "manifest.json", manifest)
 
             with (
                 patch.object(archive, "inspect_channel_creator") as inspect,
-                patch.object(archive, "refresh_creator_batch", return_value=manifest) as refresh,
+                patch.object(archive, "_refresh_creator_batch_unlocked", return_value=manifest) as refresh,
             ):
                 result = archive.resume_job(job_id, root)
 
@@ -278,6 +300,23 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
             registry = archive.load_channel_creator_registry(root)
             self.assertEqual(registry["sources"]["https://weixin.qq.com/sph/one"], "creator@finder")
 
+    def test_single_channel_author_backend_transient_is_resumable(self):
+        transient = archive.ArchiveError("channels_backend_error", "temporary", 69)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            submitted = archive.submit_content("https://weixin.qq.com/sph/one", root)
+            with (
+                patch.object(archive, "submit_content", return_value=submitted),
+                patch.object(archive, "resolve_channel_author_from_url", side_effect=transient),
+            ):
+                result = archive.download_channel_url("https://weixin.qq.com/sph/one", root)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "waiting_for_authorization")
+            manifest = archive.read_json_if_valid(root / result["manifest"]) or {}
+            self.assertNotIn("completed_at", manifest)
+            self.assertEqual(manifest["error"]["code"], "channels_backend_error")
+
     def test_creator_registry_is_private_from_first_write(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -287,19 +326,69 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
             self.assertEqual(os.stat(path.parent).st_mode & 0o777, 0o700)
 
     def test_session_status_is_read_only_and_reports_ready(self):
-        with patch.object(archive, "search_channel_author", return_value={"ok": True, "count": 0, "candidates": []}):
+        with patch.object(archive, "search_channel_author", return_value={"ok": True, "count": 0, "candidates": []}) as search:
             with tempfile.TemporaryDirectory() as temporary:
-                status = archive.channel_session_status(Path(temporary))
+                root = Path(temporary)
+                status = archive.channel_session_status(root)
+                archive.channel_session_status(root)
         self.assertEqual(status["status"], "author_search_ready")
         self.assertFalse(status["capabilities"]["creator_feed"])
+        queries = [call.args[0] for call in search.call_args_list]
+        self.assertEqual(len(queries), 2)
+        self.assertNotEqual(queries[0], queries[1])
+        self.assertTrue(all(query.startswith("__hermes_session_probe_") for query in queries))
 
     def test_session_status_marks_authorization_required_not_ready(self):
         unavailable = archive.ArchiveError("channels_authorization_required", "offline", 69)
         with patch.object(archive, "search_channel_author", side_effect=unavailable):
             with tempfile.TemporaryDirectory() as temporary:
-                status = archive.channel_session_status(Path(temporary))
+                root = Path(temporary)
+                archive.register_channel_creator(root, "https://weixin.qq.com/sph/one", CREATOR)
+                status = archive.channel_session_status(root)
+                snapshot = archive.load_channel_session_snapshot(root)
         self.assertFalse(status["ok"])
         self.assertEqual(status["status"], "authorization_required")
+        self.assertEqual(status["realtime_status"], "authorization_required")
+        self.assertFalse(status["capabilities"]["realtime_author_search"])
+        self.assertTrue(status["capabilities"]["registered_creator_lookup"])
+        self.assertEqual(status["registered_creators"], 1)
+        self.assertEqual(snapshot["realtime_status"], "authorization_required")
+        self.assertEqual(snapshot["registered_creators"], 1)
+
+    def test_session_snapshot_preserves_last_ready_time_after_disconnect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(archive, "search_channel_author", return_value={"ok": True, "count": 0, "candidates": []}):
+                archive.channel_session_status(root)
+            ready = archive.load_channel_session_snapshot(root)
+            unavailable = archive.ArchiveError("channels_authorization_required", "offline", 69)
+            with patch.object(archive, "search_channel_author", side_effect=unavailable):
+                archive.channel_session_status(root)
+            disconnected = archive.load_channel_session_snapshot(root)
+
+        self.assertEqual(disconnected["last_ready_at"], ready["last_ready_at"])
+        self.assertEqual(disconnected["realtime_status"], "authorization_required")
+
+    def test_session_snapshot_is_private_and_telemetry_failure_is_nonfatal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive.save_channel_session_snapshot(root, "ready", 2)
+            path = archive.channel_session_snapshot_path(root)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with patch.object(archive, "save_channel_session_snapshot", side_effect=OSError("readonly")):
+                with patch.object(archive, "search_channel_author", return_value={"ok": True, "count": 0, "candidates": []}):
+                    status = archive.channel_session_status(root)
+            self.assertTrue(status["ok"])
+
+    def test_malformed_session_snapshot_types_fall_back_to_defaults(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = archive.channel_session_snapshot_path(root)
+            path.parent.mkdir(parents=True)
+            path.write_text('{"registered_creators": "not-a-number", "realtime_status": []}', encoding="utf-8")
+            snapshot = archive.load_channel_session_snapshot(root)
+            self.assertEqual(snapshot["registered_creators"], 0)
+            self.assertEqual(snapshot["realtime_status"], "unknown")
 
 
 if __name__ == "__main__":

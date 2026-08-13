@@ -11,7 +11,7 @@ core_revision="8c137bf1a56106a050f12567fe0ed587bccea042"
 core_url="https://codeload.github.com/Zhenxiangai/link-video-downloader-zhenxiangai/tar.gz/$core_revision"
 core_sha256="acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 hermes_home=${HERMES_HOME:-"$HOME/.hermes"}
 archive_root=${WECHAT_ARCHIVE_ROOT:-"$HOME/Documents/WeChatArchive"}
 backend_root=${WECHAT_CHANNELS_HOME:-"$HOME/.local/share/wx_channels_download/$release"}
@@ -152,10 +152,8 @@ install_dependencies() {
         echo "message=Hermes must review the official Homebrew installer, explain it, request approval, install Homebrew, then run this command again."
         exit 69
     }
-    missing=""
-    has ffmpeg || missing="ffmpeg"
-    has whisper-cli || missing="$missing whisper-cpp"
-    [ -z "$missing" ] || "$brew_command" install $missing
+    has ffmpeg || "$brew_command" install ffmpeg
+    has whisper-cli || "$brew_command" install whisper-cpp
 }
 
 install_model() {
@@ -186,10 +184,10 @@ install_core() {
     download "$core_url" "$archive"
     tar -xzf "$archive" -C "$temporary_dir"
     source_core=$(find "$temporary_dir" -mindepth 3 -maxdepth 3 -type d -path '*/vendor/transparent-core' -print -quit)
-    [ -n "$source_core" ] && core_ok "$source_core" || {
+    if [ -z "$source_core" ] || ! core_ok "$source_core"; then
         find "$temporary_dir" -depth -delete
         fail "downloaded_transparent_core_checksum_mismatch"
-    }
+    fi
     mv "$source_core" "$core_root"
     find "$temporary_dir" -depth -delete
 }
@@ -242,7 +240,7 @@ mp:
 EOF
 }
 
-ensure_mp_enabled() {
+ensure_backend_config() {
     "$python_bin" - "$backend_config" <<'PY'
 import os
 import sys
@@ -288,7 +286,7 @@ install_backend() {
         find "$temporary_dir" -depth -delete
     fi
     write_backend_config
-    ensure_mp_enabled
+    ensure_backend_config
 }
 
 plist_add() {
@@ -525,8 +523,21 @@ remove_capture_certificate() {
     [ "$(snapshot_value persistent_certificate)" != "true" ] || return 0
     cert_name=$(snapshot_value cert_name)
     [ -n "$cert_name" ] || return 0
-    installed=$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)
-    [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
+    cleanup_failed=0
+    keychain="$HOME/Library/Keychains/login.keychain-db"
+    cert_output=$(mktemp)
+    if security find-certificate -a -c "$cert_name" -p "$keychain" >"$cert_output" 2>/dev/null; then
+        installed=$(cat "$cert_output")
+    elif security find-certificate -a "$keychain" >/dev/null 2>&1; then
+        installed=""
+    else
+        rm -f "$cert_output"
+        return 1
+    fi
+    rm -f "$cert_output"
+    [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$keychain" >/dev/null || cleanup_failed=1
+    rm -f "$backend_runtime/certs/$cert_name.pem" "$backend_runtime/certs/$cert_name.key" || cleanup_failed=1
+    return "$cleanup_failed"
 }
 
 unattended_ready() {
@@ -624,14 +635,15 @@ enable_capture() {
         cert_name="$unattended_cert_name"
         cert_file="$backend_runtime/certs/$cert_name.pem"
         echo "persistent_certificate=true" >>"$proxy_snapshot"
+        echo "cert_name=$cert_name" >>"$proxy_snapshot"
     else
         cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
+        echo "cert_name=$cert_name" >>"$proxy_snapshot"
         api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
         cert_file="$backend_runtime/certs/$cert_name.pem"
         [ -f "$cert_file" ] || fail "generated_certificate_not_found"
         security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
     fi
-    echo "cert_name=$cert_name" >>"$proxy_snapshot"
     proxy_json=$("$python_bin" - "$service" "$capture_route" "$cert_name" "$cert_file" "$backend_runtime/certs/$cert_name.key" <<'PY'
 import json
 import sys
@@ -689,8 +701,8 @@ restore_proxy() {
 
 cleanup_capture() {
     cleanup_failed=0
-    if [ -f "$proxy_snapshot" ] && ! restore_clash_runtime; then
-        return 1
+    if [ -f "$proxy_snapshot" ]; then
+        restore_clash_runtime || cleanup_failed=1
     fi
     if api_get /api/status >/dev/null 2>&1; then
         api_post /api/proxy/config '{"values":{"proxy.enabled":false,"proxy.system":false},"restart":true}' || cleanup_failed=1
@@ -744,6 +756,15 @@ capture_python() {
     printf '%s\n' "$result"
     [ "$cleanup_status" -eq 0 ] || return "$cleanup_status"
     [ "$command_status" -eq 0 ] || return "$command_status"
+}
+
+recover_channels_session() {
+    timeout=${1:-300}
+    case "$timeout" in
+        ''|*[!0-9]*) fail "invalid_recovery_timeout" ;;
+    esac
+    started_at=$(date +%s)
+    capture_python recover-channel-session --timeout "$timeout" --poll-interval 5 --started-at "$started_at" --cleanup-reserve 30
 }
 
 inspect_channel_author() {
@@ -817,6 +838,7 @@ case "${1:-}" in
     status) status ;;
     enable-capture) enable_capture ;;
     disable-capture) disable_capture ;;
+    recover-channel-session) recover_channels_session "${2:-300}" ;;
     authorize-unattended) authorize_unattended ;;
     revoke-unattended) revoke_unattended ;;
     download-channel-url) download_channel_url "${2:-}" ;;
@@ -825,7 +847,7 @@ case "${1:-}" in
     inspect-creator) inspect_creator "${2:-}" ;;
     download-creator-plan) download_creator_plan "${2:-}" "${3:-}" ;;
     *)
-        echo "usage: $0 {doctor|install|status|authorize-unattended|revoke-unattended|enable-capture|disable-capture|download-channel-url <share-url>|inspect-channel-author <share-url>|download-channel-plan <job-id> <count>|inspect-creator <share-url>|download-creator-plan <job-id> <count>}" >&2
+        echo "usage: $0 {doctor|install|status|authorize-unattended|revoke-unattended|enable-capture|disable-capture|recover-channel-session [timeout-seconds]|download-channel-url <share-url>|inspect-channel-author <share-url>|download-channel-plan <job-id> <count>|inspect-creator <share-url>|download-creator-plan <job-id> <count>}" >&2
         exit 64
         ;;
 esac
