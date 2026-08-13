@@ -197,6 +197,45 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             markdown = (job_dir / "article.md").read_text(encoding="utf-8")
             self.assertIn("- 发布日期：2026-08-12T12:00:00Z", markdown)
 
+    def test_submit_official_batch_reused_child_backfills_inventory_publish_time(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_dir = root / "jobs" / "batch-20000101T000000Z-00000000"
+            child_dir = root / "jobs" / "content-20000101T000000Z-11111111"
+            parent_dir.mkdir(parents=True)
+            child_dir.mkdir(parents=True)
+            child = {
+                "job_id": child_dir.name,
+                "kind": "content",
+                "platform": "wechat_official_account",
+                "content_id": "wechat-official:biz-one:1:1:test",
+                "status": "completed",
+            }
+            archive.write_json(child_dir / "manifest.json", child)
+            parent_path = parent_dir / "manifest.json"
+            manifest = {
+                "job_id": parent_dir.name,
+                "kind": "batch",
+                "platform": "wechat_official_account",
+                "status": "processing",
+                "items": [
+                    {
+                        "content_id": child["content_id"],
+                        "canonical_url": "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test",
+                        "title": "测试文章",
+                        "published_at": "2026-08-12T12:00:00Z",
+                        "child_job_id": None,
+                        "result": "discovered",
+                    }
+                ],
+            }
+            archive.write_json(parent_path, manifest)
+            with patch.object(archive, "refresh_official_batch", side_effect=lambda value, *_: value):
+                archive.submit_official_batch_children(manifest, parent_path, root)
+            updated = json.loads((child_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["published_at"], "2026-08-12T12:00:00Z")
+            self.assertEqual(updated["title"], "测试文章")
+
     def test_submit_official_batch_children_copies_inventory_publish_time(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

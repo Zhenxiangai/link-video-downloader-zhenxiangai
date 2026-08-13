@@ -2769,6 +2769,14 @@ def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Pa
             continue
         existing = existing_official_content(root, str(item["content_id"]))
         if existing:
+            existing_path = root / "jobs" / str(existing["job_id"]) / "manifest.json"
+            existing_changed = False
+            for field in ("title", "published_at"):
+                if not existing.get(field) and item.get(field):
+                    existing[field] = item[field]
+                    existing_changed = True
+            if existing_changed:
+                write_json(existing_path, existing)
             item.update(
                 {
                     "child_job_id": existing["job_id"],
