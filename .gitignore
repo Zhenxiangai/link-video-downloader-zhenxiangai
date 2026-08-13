@@ -1,3 +1,33 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Local runtime and proof artifacts
+runtime/
+jobs/
+content/
+state/
+.proof/
+
+# Credentials, certificates, captures, databases, and logs
+.env
+.env.*
+*.cookies
+cookies.txt
+cookie*.txt
+bilibili.txt
+xiaohongshu.txt
+douyin.txt
+*.pem
+*.key
+*.cer
+*.crt
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.har

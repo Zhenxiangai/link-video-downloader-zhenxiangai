@@ -30,7 +30,7 @@ from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandle
 
 sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
 TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"
@@ -52,7 +52,8 @@ UNAVAILABLE_PAGE_TITLES = {"账号已迁移", "内容已被删除", "此内容�
 VERIFICATION_MARKERS = {"当前访问环境异常", "访问过于频繁", "请完成验证", "安全验证", "操作频繁", "验证码"}
 JOB_ID_RE = re.compile(r"^(article|channel|media|content|batch)-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 INPUT_NAME_RE = re.compile(r"^[A-Za-z0-9._ -]{1,180}$")
-SENSITIVE_QUERY_KEYS = {"key", "uin", "pass_ticket"}
+SENSITIVE_QUERY_KEYS = {"key", "uin", "pass_ticket", "appmsg_token"}
+OFFICIAL_ARTICLE_QUERY_KEYS = {"__biz", "mid", "idx", "sn"}
 PLATFORM_DIRS = {
     "wechat_channels": "视频号",
     "wechat_official_account": "公众号",
@@ -81,6 +82,17 @@ def utc_now() -> str:
 def archive_root() -> Path:
     configured = os.environ.get("WECHAT_ARCHIVE_ROOT")
     return Path(configured).expanduser() if configured else Path.home() / "Documents" / "WeChatArchive"
+
+
+def mp_api_token() -> str:
+    path = Path(os.environ.get("WECHAT_MP_TOKEN_FILE") or Path.home() / ".local" / "share" / "wechat-archive" / "mp-api-token").expanduser()
+    try:
+        token = path.read_text(encoding="utf-8").splitlines()[0].strip()
+    except (OSError, IndexError) as exc:
+        raise ArchiveError("channels_backend_token_missing", "公众号本地服务凭证不可用，请重新运行安装。", 69) from exc
+    if not token:
+        raise ArchiveError("channels_backend_token_missing", "公众号本地服务凭证不可用，请重新运行安装。", 69)
+    return token
 
 
 def require_enabled() -> None:
@@ -113,7 +125,7 @@ def private_atomic_write(path: Path, data: bytes) -> None:
 
 
 def write_json(path: Path, value: dict) -> None:
-    atomic_write(path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode())
+    private_atomic_write(path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode())
 
 
 def sha256_file(path: Path) -> str:
@@ -126,8 +138,12 @@ def sha256_file(path: Path) -> str:
 
 def new_job(root: Path, kind: str, source: str) -> tuple[str, Path, dict]:
     job_id = f"{kind}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
-    job_dir = root / "jobs" / job_id
-    job_dir.mkdir(parents=True, exist_ok=False)
+    jobs_dir = root / "jobs"
+    jobs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(jobs_dir, 0o700)
+    job_dir = jobs_dir / job_id
+    job_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+    os.chmod(job_dir, 0o700)
     manifest = {
         "schema_version": 1,
         "tool_version": VERSION,
@@ -248,7 +264,7 @@ def fetch_limited(
 
 def fetch_official_article_with_session(raw_url: str) -> tuple[bytes, str, str]:
     safe_url = validate_https_url(raw_url, ARTICLE_HOSTS)
-    endpoint = CHANNELS_API_BASE + "/api/mp/article/content?" + urlencode({"url": safe_url})
+    endpoint = CHANNELS_API_BASE + "/api/mp/article/content?" + urlencode({"url": safe_url, "token": mp_api_token()})
     request = Request(endpoint, headers={"Accept": "text/html,application/xhtml+xml", "X-WXMP-Local-Client": "1"})
     try:
         with build_opener(ProxyHandler({})).open(request, timeout=25) as response:
@@ -547,7 +563,13 @@ def submission_url(raw: str) -> tuple[str, str]:
 
 def canonical_url(raw: str) -> str:
     parsed = _split_url(raw)
-    query = urlencode([(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() not in SENSITIVE_QUERY_KEYS])
+    host = (parsed.hostname or "").rstrip(".").lower()
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    if host == "mp.weixin.qq.com":
+        query_items = [(key, value) for key, value in query_items if key in OFFICIAL_ARTICLE_QUERY_KEYS]
+    else:
+        query_items = [(key, value) for key, value in query_items if key.lower() not in SENSITIVE_QUERY_KEYS]
+    query = urlencode(query_items)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", query, ""))
 
 
@@ -1270,7 +1292,8 @@ def recover_channel_session(
 
 def content_worker_once(root: Path) -> tuple[dict, bool]:
     jobs_root = root / "jobs"
-    jobs_root.mkdir(parents=True, exist_ok=True)
+    jobs_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(jobs_root, 0o700)
     resumed_creators = resume_waiting_channel_creators_once(root)
     progress_channel_jobs_once(root)
     for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
@@ -2286,6 +2309,8 @@ def channels_api(
     deadline: float | None = None,
 ) -> dict:
     url = CHANNELS_API_BASE + path
+    if path.startswith("/api/mp/"):
+        query = dict(query or {}, token=mp_api_token())
     if query:
         url += "?" + urlencode(query)
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
@@ -2712,10 +2737,13 @@ def existing_official_content(root: Path, content_id: str) -> dict | None:
     return next((child for child in candidates if child.get("status") == "completed"), candidates[0])
 
 
-def refresh_official_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
+def _refresh_official_batch_unlocked(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    if manifest.get("status") == "awaiting_download_count" and not manifest.get("selection"):
+        return manifest
     completed = unavailable = failed = processing = 0
-    skipped = sum(item.get("result") == "skipped_existing" for item in manifest.get("items") or [])
-    for item in manifest.get("items") or []:
+    selected_items = (manifest.get("items") or [])[: int((manifest.get("selection") or {}).get("limit") or 0)]
+    skipped = sum(item.get("result") == "skipped_existing" for item in selected_items)
+    for item in selected_items:
         if item.get("result") == "skipped_existing":
             continue
         child_id = item.get("child_job_id")
@@ -2745,7 +2773,8 @@ def refresh_official_batch(manifest: dict, manifest_path: Path, root: Path) -> d
     discovered = len(manifest.get("items") or [])
     manifest["counts"] = {
         "discovered": discovered,
-        "submitted": discovered - skipped,
+        "selected": len(selected_items),
+        "submitted": len(selected_items) - skipped,
         "skipped_existing": skipped,
         "processing": processing,
         "completed": completed,
@@ -2763,8 +2792,20 @@ def refresh_official_batch(manifest: dict, manifest_path: Path, root: Path) -> d
     return manifest
 
 
-def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Path) -> dict:
-    for item in manifest.get("items") or []:
+def refresh_official_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or manifest
+    try:
+        latest = read_json_if_valid(manifest_path) or manifest
+        return _refresh_official_batch_unlocked(latest, manifest_path, root)
+    finally:
+        os.close(descriptor)
+
+
+def _submit_official_batch_children_unlocked(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    limit = int((manifest.get("selection") or {}).get("limit") or 0)
+    for item in (manifest.get("items") or [])[:limit]:
         if item.get("child_job_id"):
             continue
         existing = existing_official_content(root, str(item["content_id"]))
@@ -2799,7 +2840,18 @@ def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Pa
             item.update({"child_job_id": submitted["job_id"], "result": "processing"})
         manifest.update({"status": "processing", "updated_at": utc_now()})
         write_json(manifest_path, manifest)
-    return refresh_official_batch(manifest, manifest_path, root)
+    return _refresh_official_batch_unlocked(manifest, manifest_path, root)
+
+
+def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Path) -> dict:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or manifest
+    try:
+        current = read_json_if_valid(manifest_path) or manifest
+        return _submit_official_batch_children_unlocked(current, manifest_path, root)
+    finally:
+        os.close(descriptor)
 
 
 def discover_official_batch(manifest: dict, manifest_path: Path, root: Path) -> dict:
@@ -2812,6 +2864,8 @@ def discover_official_batch(manifest: dict, manifest_path: Path, root: Path) -> 
     if not reference["biz"]:
         raise ArchiveError("official_account_not_identified", "参考文章和本次采集窗口都没有唯一识别出公众号。", 69)
     manifest["account"] = {"name": reference["account_name"], "account_id": reference["account_id"]}
+    if reference["account_name"]:
+        manifest["title"] = reference["account_name"]
     pagination = manifest["pagination"]
     offset = int(pagination.get("next_offset") or 0)
     try:
@@ -2851,12 +2905,21 @@ def discover_official_batch(manifest: dict, manifest_path: Path, root: Path) -> 
         manifest.update({"status": "discovering", "updated_at": utc_now()})
         write_json(manifest_path, manifest)
         return manifest
-    manifest.update({"status": "processing", "updated_at": utc_now()})
+    available = len(manifest["items"])
+    manifest["items"].sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+    manifest.update(
+        {
+            "status": "awaiting_download_count",
+            "updated_at": utc_now(),
+            "selection": None,
+            "next_action": f"该公众号当前可抓取文章共 {available} 篇，默认从最新开始。你要抓取多少篇？",
+        }
+    )
     write_json(manifest_path, manifest)
-    return submit_official_batch_children(manifest, manifest_path, root)
+    return manifest
 
 
-def process_official_batch(manifest_path: Path, root: Path) -> dict:
+def _process_official_batch_unlocked(manifest_path: Path, root: Path) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("status") not in {
         "queued",
@@ -2868,9 +2931,10 @@ def process_official_batch(manifest_path: Path, root: Path) -> dict:
         return manifest
     try:
         if (manifest.get("pagination") or {}).get("complete"):
-            if any(not item.get("child_job_id") for item in manifest.get("items") or []):
-                return submit_official_batch_children(manifest, manifest_path, root)
-            return refresh_official_batch(manifest, manifest_path, root)
+            selected_items = (manifest.get("items") or [])[: int((manifest.get("selection") or {}).get("limit") or 0)]
+            if any(not item.get("child_job_id") for item in selected_items):
+                return _submit_official_batch_children_unlocked(manifest, manifest_path, root)
+            return _refresh_official_batch_unlocked(manifest, manifest_path, root)
         manifest.update({"status": "discovering", "updated_at": utc_now()})
         write_json(manifest_path, manifest)
         return discover_official_batch(manifest, manifest_path, root)
@@ -2885,6 +2949,58 @@ def process_official_batch(manifest_path: Path, root: Path) -> dict:
         )
         write_json(manifest_path, manifest)
         return manifest
+
+
+def process_official_batch(manifest_path: Path, root: Path) -> dict:
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        return read_json_if_valid(manifest_path) or {}
+    try:
+        return _process_official_batch_unlocked(manifest_path, root)
+    finally:
+        os.close(descriptor)
+
+
+def download_official_batch_plan(job_id: str, limit: int, root: Path) -> dict:
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise ArchiveError("invalid_job_id", "Job ID 格式错误。")
+    manifest_path = root / "jobs" / job_id / "manifest.json"
+    if not manifest_path.is_file():
+        raise ArchiveError("job_not_found", "没有找到该任务。", 66)
+    descriptor = acquire_creator_batch_lock(manifest_path)
+    if descriptor is None:
+        raise ArchiveError("job_busy", "该任务正在提交，请稍后查询同一任务状态。", 75)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest.get("kind") != "batch"
+            or manifest.get("platform") != "wechat_official_account"
+            or manifest.get("status") != "awaiting_download_count"
+        ):
+            raise ArchiveError("job_not_waiting_for_count", "该任务当前不在等待抓取数量。", 66)
+        items = manifest.get("items") or []
+        if limit < 1 or limit > len(items):
+            raise ArchiveError("invalid_download_count", f"抓取数量应在 1 到 {len(items)} 之间。")
+        manifest.update(
+            {
+                "status": "processing",
+                "updated_at": utc_now(),
+                "selection": {"limit": limit, "order": "newest"},
+            }
+        )
+        manifest.pop("next_action", None)
+        write_json(manifest_path, manifest)
+        manifest = _submit_official_batch_children_unlocked(manifest, manifest_path, root)
+    finally:
+        os.close(descriptor)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": manifest["status"],
+        "platform": manifest["platform"],
+        "counts": manifest["counts"],
+        "manifest": archive_relative(root, manifest_path),
+    }
 
 
 def channel_author_result(root: Path, manifest: dict) -> dict:
@@ -3695,7 +3811,28 @@ def job_status(job_id: str, root: Path) -> dict:
         manifest = refresh_creator_batch(manifest, manifest_path, root)
     elif manifest.get("kind") == "batch" and (manifest.get("pagination") or {}).get("complete"):
         manifest = refresh_official_batch(manifest, manifest_path, root)
-    return {"ok": True, "job": manifest}
+    summary = {
+        key: manifest.get(key)
+        for key in ("job_id", "kind", "platform", "status", "title", "created_at", "updated_at", "completed_at", "counts")
+        if manifest.get(key) is not None
+    }
+    if manifest.get("status") == "awaiting_download_count":
+        items = manifest.get("items") or (manifest.get("inventory") or {}).get("items") or []
+        summary["available"] = len(items)
+        summary["question"] = manifest.get("next_action")
+    elif manifest.get("status") in {"waiting_for_authorization", "waiting_for_reauthentication"}:
+        summary["next_action"] = "请在方便使用 Mac 时恢复该平台授权，然后继续同一 Job；不要重复提交链接。"
+    if manifest.get("error"):
+        summary["error"] = {
+            key: manifest["error"].get(key)
+            for key in ("code", "stage")
+            if manifest["error"].get(key) is not None
+        }
+    summary["outputs"] = [
+        {key: output.get(key) for key in ("role", "bytes", "sha256") if output.get(key) is not None}
+        for output in manifest.get("outputs") or []
+    ]
+    return {"ok": True, "job": summary}
 
 
 def channel_session_status(
@@ -3761,6 +3898,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--url", required=True)
     official_batch = subparsers.add_parser("extract-official-account")
     official_batch.add_argument("--url", required=True)
+    official_plan = subparsers.add_parser("download-official-account-plan")
+    official_plan.add_argument("--job-id", required=True)
+    official_plan.add_argument("--limit", required=True, type=int, help="总抓取篇数")
     article = subparsers.add_parser("archive-article")
     article.add_argument("--url", required=True)
     channel = subparsers.add_parser("capture-channel")
@@ -3854,6 +3994,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "extract-official-account":
             require_enabled()
             result = submit_official_batch(args.url, root)
+        elif args.action == "download-official-account-plan":
+            require_enabled()
+            result = download_official_batch_plan(args.job_id, args.limit, root)
         elif args.action == "capture-channel":
             require_enabled()
             result = create_channel_task(args.url, root)

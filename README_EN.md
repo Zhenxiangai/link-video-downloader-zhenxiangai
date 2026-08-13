@@ -88,7 +88,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.1/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -113,7 +113,9 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 
 `v1.2.0` adds conditional mobile-submitted Channels creator tasks, a private creator registry, capability-graded session status, frozen same-Job recovery, and a bounded recovery window that drains all waiting work. It removes all default WeChat UI automation and Computer Use setup. Real new-creator acceptance resolved one public share, inventoried 702 visible items, froze the newest two, and completed both videos and all transcript artifacts without downloading any other history. The live page session later expired as expected; this release does not claim permanent login or background page reconnection.
 
-`v1.2.0` also adds WeChat Official Account archiving. One public entry article consistently inventoried 325 records across 33 pages. Three sample articles completed HTML, Markdown, and 36 image downloads with no CAPTCHA archive and no captured-session value found in the final artifacts. The 325-record result is an inventory, not a claim that all 325 article bodies were downloaded.
+`v1.2.0` also adds WeChat Official Account archiving. It inventories the currently visible history without creating article children, then reuses the same parent Job to archive the newest user-confirmed count with HTML, Markdown, images, and manifests. Public-release acceptance uses only an isolated small sample, not a full-history run.
+
+`v1.2.1` generates a private token for the local Official Account API and pins the hardened core release with the public CA/private key removed. Installation does not enable capture or change the system proxy.
 
 Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 

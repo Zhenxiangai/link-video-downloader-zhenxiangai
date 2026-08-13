@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 
-release="v260810-zhenxiangai.1"
-release_url="https://github.com/Zhenxiangai/wx_channels_download/releases/download/v260810-zhenxiangai.1/wx_video_download_v260810-zhenxiangai.1_darwin_arm64.zip"
-release_sha256="c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b"
-backend_sha256="ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09"
+release="v260810-zhenxiangai.2"
+release_url="https://github.com/Zhenxiangai/wx_channels_download/releases/download/v260810-zhenxiangai.2/wx_video_download_v260810-zhenxiangai.2_darwin_arm64.zip"
+release_sha256="e03b1bf8ec13d2412be8f10f6702bed6769dac75211be5023c71ea33ff871c4c"
+backend_sha256="fa9f56d119556ac4fff263871cd73add3217ec0b84950276ac645778f9020575"
 model_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin"
 model_sha256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
 core_revision="8c137bf1a56106a050f12567fe0ed587bccea042"
@@ -14,6 +14,7 @@ core_sha256="acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 hermes_home=${HERMES_HOME:-"$HOME/.hermes"}
 archive_root=${WECHAT_ARCHIVE_ROOT:-"$HOME/Documents/WeChatArchive"}
+mp_token_file=${WECHAT_MP_TOKEN_FILE:-"$HOME/.local/share/wechat-archive/mp-api-token"}
 backend_root=${WECHAT_CHANNELS_HOME:-"$HOME/.local/share/wx_channels_download/$release"}
 backend_bin="$backend_root/wx_video_download"
 backend_config="$backend_root/config.wechat-archive.yaml"
@@ -236,21 +237,43 @@ proxy:
     port: 9900
 mp:
   enabled: true
+  tokenFilepath: "$mp_token_file"
   refreshskipminutes: 20
 EOF
 }
 
+install_mp_token() {
+    mkdir -p "$(dirname -- "$mp_token_file")"
+    chmod 700 "$(dirname -- "$mp_token_file")"
+    if [ ! -s "$mp_token_file" ]; then
+        [ ! -e "$mp_token_file" ] || fail "mp_token_file_empty: $mp_token_file"
+        "$python_bin" - "$mp_token_file" <<'PY'
+import os
+import secrets
+import sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    handle.write(secrets.token_hex(32) + "\n")
+PY
+    fi
+    chmod 600 "$mp_token_file"
+}
+
 ensure_backend_config() {
-    "$python_bin" - "$backend_config" <<'PY'
+    "$python_bin" - "$backend_config" "$mp_token_file" <<'PY'
+import json
 import os
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+token_path = sys.argv[2]
 lines = path.read_text(encoding="utf-8").splitlines()
 start = next((i for i, line in enumerate(lines) if line == "mp:"), None)
 if start is None:
-    lines.extend(["mp:", "  enabled: true", "  refreshskipminutes: 20"])
+    lines.extend(["mp:", "  enabled: true", f"  tokenFilepath: {json.dumps(token_path)}", "  refreshskipminutes: 20"])
 else:
     end = next((i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()), len(lines))
     enabled = next((i for i in range(start + 1, end) if lines[i].strip().startswith("enabled:")), None)
@@ -258,6 +281,13 @@ else:
         lines.insert(start + 1, "  enabled: true")
     else:
         lines[enabled] = lines[enabled][: len(lines[enabled]) - len(lines[enabled].lstrip())] + "enabled: true"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()), len(lines))
+    token = next((i for i in range(start + 1, end) if lines[i].strip().startswith("tokenFilepath:")), None)
+    token_line = f"  tokenFilepath: {json.dumps(token_path)}"
+    if token is None:
+        lines.insert(start + 1, token_line)
+    else:
+        lines[token] = token_line
 temporary = path.with_suffix(path.suffix + ".tmp")
 temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
 os.chmod(temporary, 0o600)
@@ -329,11 +359,12 @@ install_all() {
     install_dependencies
     install_model
     install_core
+    install_mp_token
     install_backend
     install_backend_service
     WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
         sh "$script_dir/manage_transcriber.sh" install
-    WECHAT_WORKER_KIND=content WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
+    WECHAT_WORKER_KIND=content WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" WECHAT_MP_TOKEN_FILE="$mp_token_file" \
         sh "$script_dir/manage_transcriber.sh" install
     status
 }
@@ -789,6 +820,12 @@ download_creator_plan() {
     WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-creator-plan --job-id "$1" --limit "$2"
 }
 
+download_official_account_plan() {
+    [ -n "${1:-}" ] || fail "missing Official Account batch Job ID"
+    [ -n "${2:-}" ] || fail "missing article count"
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-official-account-plan --job-id "$1" --limit "$2"
+}
+
 download_channel_url() {
     [ -n "${1:-}" ] || fail "missing Channels share URL"
     WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-channel-url --url "$1"
@@ -846,8 +883,9 @@ case "${1:-}" in
     download-channel-plan) download_channel_plan "${2:-}" "${3:-}" ;;
     inspect-creator) inspect_creator "${2:-}" ;;
     download-creator-plan) download_creator_plan "${2:-}" "${3:-}" ;;
+    download-official-account-plan) download_official_account_plan "${2:-}" "${3:-}" ;;
     *)
-        echo "usage: $0 {doctor|install|status|authorize-unattended|revoke-unattended|enable-capture|disable-capture|recover-channel-session [timeout-seconds]|download-channel-url <share-url>|inspect-channel-author <share-url>|download-channel-plan <job-id> <count>|inspect-creator <share-url>|download-creator-plan <job-id> <count>}" >&2
+        echo "usage: $0 {doctor|install|status|authorize-unattended|revoke-unattended|enable-capture|disable-capture|recover-channel-session [timeout-seconds]|download-channel-url <share-url>|inspect-channel-author <share-url>|download-channel-plan <job-id> <count>|inspect-creator <share-url>|download-creator-plan <job-id> <count>|download-official-account-plan <job-id> <count>}" >&2
         exit 64
         ;;
 esac
