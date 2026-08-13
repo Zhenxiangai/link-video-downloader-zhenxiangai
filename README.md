@@ -2,42 +2,194 @@
 
 # Link Video Downloader by ZhenxiangAI
 
-**一站式多平台链接视频下载、图文归档与逐字稿生成**
+**把视频链接发给 Hermes，后台完成下载、整理和逐字稿生成。**
 
 **视频号 · B站 · 小红书 · 抖音**
 
-发一个链接，在自己的 Mac 上得到视频、图文、带时间线的原始逐字稿和可追踪清单。
+不需要守着终端，也不用自己整理文件。任务完成后，你会得到原视频、带时间线的逐字稿和完整任务记录。
 
 **简体中文** · [English](./README_EN.md)
 
-![本地内容归档流程](./docs/assets/social-preview.jpg)
+![多平台视频下载、归档与逐字稿生成](./docs/assets/social-preview.jpg)
 
-[![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#运行边界)
+[![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827?logo=apple&logoColor=white)](#使用前需要准备什么)
 [![Latest Release](https://img.shields.io/github/v/release/Zhenxiangai/link-video-downloader-zhenxiangai?label=release&color=8b5cf6)](https://github.com/Zhenxiangai/link-video-downloader-zhenxiangai/releases/latest)
-[![Local first](https://img.shields.io/badge/data-local--first-10b981)](#内容包)
+[![Local first](https://img.shields.io/badge/data-local--first-10b981)](#数据保存在哪里)
 [![Project License](https://img.shields.io/badge/original%20code-MIT-f59e0b)](./LICENSE)
 
 </div>
 
-> [!IMPORTANT]
-> 项目已更名为 **Link Video Downloader by ZhenxiangAI**。`v1.0.2` 保留内部 Hermes Skill ID `wechat-archive` 和原有本地目录，已有用户可原位升级。
+## 这个项目能做什么？
 
-## 平台能力
+这是一个给 Hermes 使用的本地视频归档 Skill。安装并完成首次设置后，你只需要把链接发给 Hermes：
 
-| 平台 | 单链接 | 历史批量 | 正式内容包 |
+- 发一个视频链接：下载这一条内容并生成逐字稿。
+- 发一个博主链接并说明“批量抓取”：先告诉你目前能看到多少条，再询问你要下载多少条。
+- 任务进入后台后：自动下载、转写、整理目录，并持续报告进度。
+- 任务完成后：保留原视频、TXT 逐字稿、SRT 字幕、JSON 时间线和任务清单。
+
+所有主要文件默认保存在你自己的 Mac 上，不会因为运行这个项目而自动上传到第三方网盘。
+
+## 目前支持哪些平台？
+
+| 平台 | 单条链接 | 博主历史批量 | 最终内容 |
 |---|---|---|---|
-| 微信视频号 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
-| B站 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
-| 小红书 | 图文或视频 | 后续版本 | `正文.md` + `配图/`，或视频与逐字稿 |
-| 抖音 | 视频 | 先盘点总数，再按用户数量下载 | `video.mp4` + 三种原始逐字稿 |
+| 微信视频号 | 支持 | 支持 | 视频 + 三种逐字稿 |
+| B站 | 支持 | 支持 | 视频 + 三种逐字稿 |
+| 小红书 | 支持图文和视频 | 计划中 | 图文与配图，或视频与逐字稿 |
+| 抖音 | 支持 | 支持 | 视频 + 三种逐字稿 |
 
-视频正式目录只保留一个 `video.mp4`。`原始逐字稿.txt` 从 JSON 分段机械生成，按时间由上到下排列；SRT 和 JSON 同时保留。项目不自动润色、纠错、总结或翻译原始逐字稿。
+“历史批量”是指平台当前向你的账号展示、并且你有权访问的内容，不包括已删除、私密、付费无权或被平台风控拦截的内容。
 
-B站默认使用仓库固定的透明派生核心；核心提取失败时才切换运行时 API/CDN 备选。两条路线均已真实验证，任务只保留最终成功路线的一个视频。
+## 发出链接后，会经过哪些阶段？
 
-微信公众号单篇与历史批量代码、已有任务和归档仍被保留，但采集阶段当前暂停，不属于当前视频版发布基线；后续继续迭代。
+### 1. 识别链接
 
-## 统一命令
+Hermes 会先判断链接来自视频号、B站、小红书还是抖音，并为这次请求创建一个独立任务。
+
+### 2. 检查登录和授权
+
+如果首次设置已经完成，任务会直接继续。只有登录失效、微信退出、平台风控或 macOS 再次弹出权限确认时，Hermes 才会明确告诉你需要做什么。
+
+### 3. 确认抓取范围
+
+- **单链接：** 默认就是下载这一条，不再重复询问。
+- **批量抓取：** 先盘点博主目前可见的视频总数，此时不会下载；然后询问“要下载多少个？”，收到数量后才从最新内容开始执行。
+
+### 4. 后台下载
+
+任务会排队并在后台下载。批量任务会分批推进，不会同时启动几百个下载。
+
+### 5. 生成逐字稿
+
+下载完成后，项目会在本机提取音频并生成：
+
+- `原始逐字稿.txt`：按时间顺序阅读；
+- `原始逐字稿.srt`：可作为字幕使用；
+- `原始逐字稿.json`：保留每段文字和时间信息。
+
+原始逐字稿不会自动润色、改写或总结，避免把模型加工后的内容冒充原话。
+
+### 6. 整理和交付
+
+每条内容会进入自己的标题目录。Hermes 会报告完成数量、失败数量和任务状态；任务清单会记录文件大小和校验值，方便确认文件是否完整。
+
+### 7. 恢复临时状态
+
+视频号任务可能临时使用本机采集链路。任务结束后会关闭临时采集并恢复任务开始前的网络状态；如果你正在使用 Clash Verge Rev/Mihomo，项目不会关闭或覆盖你的原代理配置。
+
+## 实际对话是什么样？
+
+### 下载一条视频
+
+```text
+你：<一个视频号、B站、小红书或抖音链接>
+
+Hermes：已识别为 B站视频，任务已进入后台。
+Hermes：下载完成，正在生成逐字稿。
+Hermes：任务完成，已生成视频、TXT、SRT 和 JSON。
+```
+
+### 批量下载一个博主的视频
+
+```text
+你：<博主或作品链接>，批量抓取这个博主的视频
+
+Hermes：该博主当前可下载视频共 913 个。默认从最新开始，你要下载多少个？
+
+你：下载 5 个
+
+Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
+```
+
+发送链接本身代表你同意处理这条公开链接；首次导入平台登录状态、安装视频号本地授权或遇到新的系统权限时，Hermes 仍会单独说明并征得你的同意。
+
+## 使用前需要准备什么？
+
+当前公开版本适用于 **Apple Silicon Mac**，并需要已经安装 Hermes。
+
+首次使用通常只需要完成一次：
+
+1. 安装这个 Skill 和本地处理组件；
+2. 在 Safari 或 Chrome 登录需要使用的 B站、小红书或抖音账号，并允许按平台导入一次登录状态；
+3. 使用视频号时，在微信 Mac 版登录自己的账号；
+4. 允许一次视频号无人值守授权，以及 macOS 必要的辅助功能或录屏权限。
+
+以后通常不需要重复这些步骤。只有账号退出、平台要求验证、Mac 休眠或关机、系统撤销权限时，才可能需要你再次介入。
+
+## 安装或升级
+
+在 Hermes 所在的 Mac 上运行：
+
+```bash
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.1.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+```
+
+安装 Skill 后，可以直接对 Hermes 说：
+
+```text
+请检查并完成 Link Video Downloader 的首次设置。
+```
+
+Hermes 会先检查环境，再解释缺少哪些组件和权限。涉及安装软件、读取浏览器登录状态、添加视频号本地证书或修改系统权限时，它应该先告诉你影响并等待确认。
+
+旧版本原位升级时，已有任务、归档、Cookie 和本地配置会继续保留。
+
+## 哪些情况需要我介入？
+
+正常情况下，首次设置之后只需要发链接。以下情况 Hermes 会暂停原任务并给出下一步：
+
+- 微信、B站、小红书或抖音登录状态已经失效；
+- 平台要求扫码、验证码或风险确认；
+- macOS 弹出钥匙串、辅助功能、录屏或文件访问权限；
+- 微信没有自动打开目标视频，需要你打开 Hermes 给出的原始链接一次；
+- 当前系统代理不是项目能够自动兼容的类型。
+
+暂停不会等于重新开始。完成授权后，Hermes 应继续原来的任务，而不是重复下载或创建第二份任务。
+
+## 数据保存在哪里？
+
+默认目录是：
+
+```text
+~/Documents/WeChatArchive/
+├── content/
+│   ├── 视频号/<标题>--<作品标识>/
+│   ├── B站/<标题>--<作品标识>/
+│   ├── 小红书/<标题>--<作品标识>/
+│   └── 抖音/<标题>--<作品标识>/
+└── jobs/
+    └── <任务编号>/manifest.json
+```
+
+视频目录只保留一个最终成功的 `video.mp4`，并在同一目录保存三种逐字稿。小红书图文内容保存为 `正文.md` 和配图目录。
+
+Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进入公开仓库，也不会写入最终内容包。
+
+## 当前版本已经验证到什么程度？
+
+`v1.1.0` 已完成真实小批量验证：
+
+- 视频号：盘点到 280 条可选内容，实际完成最新 2 条；
+- B站：盘点到 913 条可选内容，实际完成最新 2 条；
+- 抖音：完成作者列表中的 2 条；
+- 三个平台合计 24 个正式产物，文件大小和校验值均与任务清单一致；
+- 小红书的单条图文和视频流程也已完成真实验证。
+
+这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
+
+## 接下来准备做什么？
+
+- 小红书博主历史批量抓取；
+- 微信公众号文章抓取；
+- 继续减少首次安装和登录失效时的人工步骤。
+
+当前版本不承诺尚在计划中的能力。
+
+<details>
+<summary><strong>开发者和排障人员：查看命令、状态与技术边界</strong></summary>
+
+### 常用命令
 
 ```bash
 export WECHAT_ARCHIVE_ENABLED=1
@@ -49,32 +201,7 @@ PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
 "$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
-`extract` 立即返回一个 `content-*` 和相对 manifest 路径，下载、归档和转写由 content worker 顺序完成。视频号在用户完成一次无人值守授权后，每次任务自动临时启用兼容路由并恢复原代理。
-
-单个视频号链接由 `download-channel-url` 自动打开微信并提交。视频号、B站和抖音的作者批量统一为两步：先盘点总数并冻结作品清单，向用户询问下载数量，收到回复后才使用同一父 Job 提交子任务。详细路由见 [SKILL.md](./SKILL.md)。
-
-## 内容包
-
-```text
-~/Documents/WeChatArchive/
-├── content/
-│   ├── 视频号/<标题>--<作品标识>/
-│   ├── B站/<标题>--<作品标识>/
-│   ├── 小红书/<标题>--<作品标识>/
-│   └── 抖音/<标题>--<作品标识>/
-├── jobs/
-│   ├── content-.../manifest.json
-│   ├── content-worker/manifest.json
-│   └── channel-transcriber/manifest.json
-├── models/ggml-small.bin
-└── video_channels/       # 保留的旧视频号批量目录
-```
-
-manifest 记录状态、标题、内容类型、规范链接、实际路线、相对产物路径、字节数和 SHA-256。
-
-## 安装与原位升级
-
-仓库目录中可执行：
+仓库目录中的安装与状态命令：
 
 ```bash
 sh ./scripts/bootstrap.sh doctor
@@ -82,48 +209,55 @@ sh ./scripts/bootstrap.sh install
 sh ./scripts/bootstrap.sh status
 ```
 
-`install` 复用 Hermes 自带 Python，并安装/复用固定透明派生核心、FFmpeg、whisper.cpp、固定模型和视频号后端；无需另装全局 Python。它管理视频号后端、旧转写 worker、新 content worker 三个用户级 LaunchAgent。透明核心从不可变提交下载并进行完整源码树校验。安装本身不导入 Cookie、不安装 CA、不修改系统代理、不代替用户登录。
-
-新机或旧版本用户按以下方式安装/原位覆盖 Skill，然后重跑上述三条命令：
+作者批量采用同一个两阶段任务：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.1.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+sh ./scripts/bootstrap.sh inspect-creator '<视频号、B站或抖音链接>'
+sh ./scripts/bootstrap.sh download-creator-plan '<上一步任务编号>' '<确认数量>'
 ```
 
-旧 `article-*`、`batch-*`、`channel-*`、`media-*`、`video_channels/` 和 manifest 原地保留；项目不增加迁移器、自动更新器或回滚管理器。
+### 常见任务状态
 
-## 登录态与授权
+| 状态 | 含义 |
+|---|---|
+| `queued` | 已接收，等待后台处理 |
+| `downloading` | 正在下载或归档 |
+| `transcribing` | 视频已下载，正在生成逐字稿 |
+| `awaiting_download_count` | 已盘点总数，等待用户确认下载数量 |
+| `waiting_for_authorization` | 等待首次授权或微信打开目标内容 |
+| `waiting_for_reauthentication` | 平台登录状态失效，等待重新登录 |
+| `completed` | 下载、转写和清单均已完成 |
+| `failed` | 任务失败，需要查看具体原因 |
 
-- B站、小红书、抖音可在用户明确授权后，从已登录 Safari 或 Chrome 按平台导入持久 Cookie jar；新机无需为此额外安装 Chrome。普通任务只读持久 jar，不逐任务读取浏览器。
-- 用户发送视频号链接即授权仅为该任务临时启用本机 CA 与采集代理。若没有现有系统代理，任务结束后会恢复原网络设置并删除该任务 CA；若已有 Clash Verge Rev（Mihomo）系统代理，Skill 会自动加载仅存在于当前任务的内存路由，系统代理端口和用户持久配置始终不变，任务结束后恢复原运行配置。其他无可控接口的系统代理会保持不变并明确停止。只有微信登录、macOS 权限弹窗、不受支持的现有代理或无法自动打开视频时才需要用户介入。
-- 任务在首次授权或登录态失效时保持原 `job_id`，进入 `waiting_for_authorization` 或 `waiting_for_reauthentication`。
-- Cookie、账号凭证、浏览器 Profile、CA 私钥和代理快照不进入 Git、内容包、manifest 或 Hermes 回执。
+`queued`、`downloading` 和 `transcribing` 只代表任务仍在进行，不代表最终文件已经完成。Hermes 应始终轮询同一个任务编号到终态。
 
-## 当前验收状态
+### 登录态和视频号代理边界
 
-新统一链路已真实完成：B站 1080P 视频、小红书图文与视频、抖音视频、视频号 1080P 视频。四个视频任务都只有一个正式视频和三种中文名逐字稿；小红书图文保留 `正文.md` 与 4 张有效配图。所有正式产物的字节数和 SHA-256 均与 manifest 一致。
+- B站、小红书和抖音只在用户明确授权后，从已登录的 Safari 或 Chrome 按平台导入持久 Cookie；普通任务不会每次重新读取浏览器。
+- 视频号的一次性无人值守初始化会在本地创建项目 CA。每个任务仍只临时启用采集链路，并在结束后恢复。
+- 使用 Clash Verge Rev/Mihomo 时，Skill 只加载当前任务的临时运行时路由，不写入用户持久配置。
+- 不受支持的现有代理会保持原样，任务会明确停止而不是擅自关闭代理。
 
-`v1.0.1` 已补齐 Hermes 直链首次安装闭环。`v1.0.2` 只迁移公开品牌和仓库地址，并让固定核心解压不依赖仓库目录名；内部 Skill ID、本地数据和四平台功能边界保持不变。
+### 本地组件
 
-`v1.0.3` 改进视频号授权恢复，并支持 Clash Verge Rev/Mihomo 已启用时的任务级内存路由：不关闭、不替换系统代理，不写入用户持久配置，任务结束后恢复原运行态。
+安装器复用 Hermes 自带 Python，并安装或复用固定透明派生核心、FFmpeg、whisper.cpp、固定模型和视频号后端。它管理视频号后端、转写 worker 和内容 worker 三个用户级后台服务。
 
-`v1.1.0` 新增视频号、B站和抖音作者历史批量：先盘点当前可见总数且不下载，再按用户确认数量从最新开始抓取、转写。真实小批量验收覆盖视频号 280 个可选、B站 913 个可选及抖音作者列表，三个平台各完成 2 条视频与三种逐字稿，24 个正式产物均与 manifest 的字节数和 SHA-256 一致。
+Release 只包含可审计源码与 notices，不包含 FFmpeg、whisper.cpp、模型、视频号后端二进制、Cookie、CA、登录态或真实归档。
 
-后续版本计划增加小红书作者批量和公众号文章抓取；当前版本不承诺这两项历史批量能力。
+</details>
 
-## 运行边界
+## 使用边界
 
-- 第一版只承诺 Apple Silicon Mac；Windows、Linux、Intel Mac、GUI 和 Web 管理台不在范围内。
-- 平台页面、内部接口和反爬规则可能变化；固定源码保证独立存活，不保证未来无需适配。
-- “完整历史”只指平台当前可见、当前账号有权访问的内容，不包括已删除、私密、付费无权或风控阻断内容。
-- 软件许可证不授予平台内容抓取、转载、传播或商业使用权。用户必须对账号、平台条款和内容权利自行负责。
+- 当前只承诺 Apple Silicon Mac；Windows、Linux、Intel Mac、GUI 和 Web 管理台不在当前范围内。
+- 软件许可证不等于平台内容授权。请只下载、保存和使用你有权访问及处理的内容，并遵守平台规则。
+- 项目不会自动润色、纠错、总结或翻译原始逐字稿；这些属于后续的独立处理。
 
-## 许可证与分发
+## 许可证与第三方组件
 
-根 [MIT License](./LICENSE) 只覆盖 ZhenxiangAI 原创文件及明确采用 MIT 的文件。仓库内的 ZhenxiangAI 透明派生核心保留 `yt-dlp 2026.07.04` 的 Unlicense、真实来源和完整第三方许可文本。
+根 [MIT License](./LICENSE) 只覆盖 ZhenxiangAI 原创文件及明确采用 MIT 的文件。仓库内的透明派生核心保留 `yt-dlp 2026.07.04` 的 Unlicense、真实来源和完整第三方许可文本。
 
-Release 只包含可审计源码与 notices，不包含 FFmpeg、whisper.cpp、模型、视频号后端二进制、Cookie、CA、登录态或真实归档。详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
-## 参与
+## 参与项目
 
-欢迎提交真实失效样例、文档改进或平台适配 Issue。请勿上传 Cookie、证书、账号信息、真实媒体、逐字稿或包含个人路径的 manifest。
+欢迎提交真实失效样例、文档改进或平台适配 Issue。请勿上传 Cookie、证书、账号信息、真实媒体、逐字稿或包含个人路径的任务清单。
