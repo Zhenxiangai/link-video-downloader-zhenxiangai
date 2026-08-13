@@ -14,14 +14,15 @@ A pinned derivative runtime subset is distributed under `vendor/transparent-core
 
 ## wx_channels_download
 
-- Source: <https://github.com/ltaoo/wx_channels_download>
-- Audited source revision: `1caadf786151baa1fdc28900aaaf9433491a81cb`
-- Downloaded release: `v260810`
-- Release archive SHA-256: `505c6a56dbc2252139c795918a68e4860a6cd62057eefd9fbad7b21a5b6cff6e`
-- Binary SHA-256: `0e5b490458847b2bb6982f9efa57ccaee7160a92b09734bb892f1aa6de6bbd7c`
+- Upstream source: <https://github.com/ltaoo/wx_channels_download>
+- ZhenxiangAI fork: <https://github.com/Zhenxiangai/wx_channels_download>
+- Audited fork revision: `8d011dce8796ce597fe603af3778f1b7131718be`
+- Downloaded release: `v260810-zhenxiangai.1`
+- Release archive SHA-256: `c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b`
+- Binary SHA-256: `ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09`
 - License: MIT with Commons Clause License Condition v1.0
 
-The repository does not bundle this source or binary; bootstrap downloads the fixed upstream release. Upstream has not established that the fixed release binary maps exactly to the audited source revision. The Commons Clause restricts selling software whose value derives substantially from this component; obtain separate permission when commercial use may fall within that condition.
+The repository does not bundle this source or binary; bootstrap downloads the fixed ZhenxiangAI fork release. That release is built from the audited fork revision while preserving the upstream copyright and license. The Commons Clause restricts selling software whose value derives substantially from this component; obtain separate permission when commercial use may fall within that condition.
 
 ## whisper.cpp
 

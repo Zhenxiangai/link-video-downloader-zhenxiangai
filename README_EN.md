@@ -6,7 +6,7 @@
 
 **Multi-platform link download, image-text archiving, and raw transcription**
 
-**WeChat Channels · Bilibili · Xiaohongshu · Douyin**
+**WeChat Official Accounts · WeChat Channels · Bilibili · Xiaohongshu · Douyin**
 
 Submit one link and keep the video, image-text post, timeline-aligned raw transcript, and traceable manifest on your own Mac.
 
@@ -26,6 +26,7 @@ Submit one link and keep the video, image-text post, timeline-aligned raw transc
 
 | Platform | Single link | History batch | Formal package |
 |---|---|---|---|
+| WeChat Official Account | Article | Inventory first, then archive the user-confirmed scope | HTML + Markdown + images |
 | WeChat Channels | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
 | Bilibili | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
 | Xiaohongshu | Image-text or video | Later release | `正文.md` + `配图/`, or video and transcripts |
@@ -35,7 +36,7 @@ A formal video directory contains exactly one `video.mp4`. `原始逐字稿.txt`
 
 Bilibili uses the repository-pinned transparent derivative core by default and switches to the runtime API/CDN fallback only when core extraction fails. Both routes have completed real validation; a task retains only the single video from its successful route.
 
-The existing WeChat Official Account single-article and history-batch code, tasks, and archives are retained, but collection is paused outside the current video-release baseline and will resume in a later iteration.
+WeChat Official Account articles use the locally captured same-account session. The history flow inventories first and archives only the user-confirmed scope; session values remain inside the local core and are removed from returned HTML.
 
 ## Unified CLI
 
@@ -112,7 +113,9 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 
 `v1.2.0` adds conditional mobile-submitted Channels creator tasks, a private creator registry, capability-graded session status, frozen same-Job recovery, and a bounded recovery window that drains all waiting work. It removes all default WeChat UI automation and Computer Use setup. Real new-creator acceptance resolved one public share, inventoried 702 visible items, froze the newest two, and completed both videos and all transcript artifacts without downloading any other history. The live page session later expired as expected; this release does not claim permanent login or background page reconnection.
 
-Future versions plan to add Xiaohongshu creator batches and WeChat Official Account article capture. This release does not claim either history-batch capability.
+`v1.2.0` also adds WeChat Official Account archiving. One public entry article consistently inventoried 325 records across 33 pages. Three sample articles completed HTML, Markdown, and 36 image downloads with no CAPTCHA archive and no captured-session value found in the final artifacts. The 325-record result is an inventory, not a claim that all 325 article bodies were downloaded.
+
+Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 
 ## Runtime boundary
 

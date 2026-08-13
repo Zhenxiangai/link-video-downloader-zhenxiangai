@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 
-release="v260810"
-release_url="https://github.com/ltaoo/wx_channels_download/releases/download/v260810/wx_video_download_v260810_darwin_arm64.zip"
-release_sha256="505c6a56dbc2252139c795918a68e4860a6cd62057eefd9fbad7b21a5b6cff6e"
-backend_sha256="0e5b490458847b2bb6982f9efa57ccaee7160a92b09734bb892f1aa6de6bbd7c"
+release="v260810-zhenxiangai.1"
+release_url="https://github.com/Zhenxiangai/wx_channels_download/releases/download/v260810-zhenxiangai.1/wx_video_download_v260810-zhenxiangai.1_darwin_arm64.zip"
+release_sha256="c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b"
+backend_sha256="ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09"
 model_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin"
 model_sha256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
 core_revision="8c137bf1a56106a050f12567fe0ed587bccea042"

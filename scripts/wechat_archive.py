@@ -246,6 +246,32 @@ def fetch_limited(
     raise ArchiveError("fetch_failed", f"下载失败：{last_error}", 69) from last_error
 
 
+def fetch_official_article_with_session(raw_url: str) -> tuple[bytes, str, str]:
+    safe_url = validate_https_url(raw_url, ARTICLE_HOSTS)
+    endpoint = CHANNELS_API_BASE + "/api/mp/article/content?" + urlencode({"url": safe_url})
+    request = Request(endpoint, headers={"Accept": "text/html,application/xhtml+xml", "X-WXMP-Local-Client": "1"})
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=25) as response:
+            content_type = response.headers.get_content_type()
+            if content_type not in {"text/html", "application/xhtml+xml"}:
+                raise ArchiveError("official_article_session_invalid", "公众号会话后端未返回 HTML。", 69)
+            length = response.headers.get("Content-Length")
+            if length and int(length) > MAX_HTML_BYTES:
+                raise ArchiveError("response_too_large", f"响应超过 {MAX_HTML_BYTES} 字节。")
+            data = response.read(MAX_HTML_BYTES + 1)
+            if len(data) > MAX_HTML_BYTES:
+                raise ArchiveError("response_too_large", f"响应超过 {MAX_HTML_BYTES} 字节。")
+            return data, content_type, safe_url
+    except ArchiveError:
+        raise
+    except HTTPError as exc:
+        if exc.code in {400, 401, 403}:
+            raise ArchiveError("reauthentication_required", "公众号文章会话当前不可用。", 69) from exc
+        raise ArchiveError("official_article_fetch_failed", "公众号正文读取失败。", 69) from exc
+    except (URLError, TimeoutError, ValueError) as exc:
+        raise ArchiveError("channels_backend_unavailable", "公众号本地会话后端不可用。", 69) from exc
+
+
 def download_public_https(raw_url: str, target: Path, *, referer: str, max_bytes: int = 2 * 1024 * 1024 * 1024) -> None:
     safe_url = validate_public_https_url(raw_url)
     request = Request(safe_url, headers={"User-Agent": "Mozilla/5.0", "Referer": referer, "Range": "bytes=0-"})
@@ -419,6 +445,8 @@ def archive_article_html(
 
         title = parser.title or "未命名公众号文章"
         markdown_lines = [f"# {title}", "", f"- 来源：{safe_url}", f"- 归档时间：{utc_now()}"]
+        if job_context and manifest.get("published_at"):
+            markdown_lines.append(f"- 发布日期：{manifest['published_at']}")
         if parser.author:
             markdown_lines.append(f"- 作者：{parser.author}")
         markdown_lines.extend(["", body, ""])
@@ -561,12 +589,17 @@ def official_article_metadata(raw_url: str, html_bytes: bytes | None = None) -> 
     match = re.search(r"var\s+nickname\s*=\s*htmlDecode\(['\"]([^'\"]*)['\"]\)", text)
     if match:
         nickname = html.unescape(match.group(1))
+    published_at = None
+    publish_match = re.search(r"var\s+(?:ct|publish_time)\s*=\s*['\"]?(\d{10})['\"]?", text)
+    if publish_match:
+        published_at = datetime.fromtimestamp(int(publish_match.group(1)), timezone.utc).isoformat().replace("+00:00", "Z")
     return {
         "biz": biz,
         "account_id": hashlib.sha256(f"wechat_official_account\0{biz}".encode()).hexdigest()[:16] if biz else "",
         "account_name": nickname,
         "content_id": content_id,
         "canonical_url": article_url,
+        "published_at": published_at,
     }
 
 
@@ -813,11 +846,13 @@ def finalize_official_article(manifest: dict, manifest_path: Path, root: Path, f
 
 def process_official_article(manifest: dict, manifest_path: Path, root: Path) -> dict:
     safe_url = validate_https_url(str(manifest["source"]), ARTICLE_HOSTS)
-    data, content_type, final_url = fetch_limited(safe_url, exact_hosts=ARTICLE_HOSTS, max_bytes=MAX_HTML_BYTES)
+    data, content_type, final_url = fetch_official_article_with_session(safe_url)
     if content_type not in {"text/html", "application/xhtml+xml"}:
         raise ArchiveError("unexpected_content_type", f"文章响应类型不是 HTML：{content_type}")
     article = official_article_metadata(final_url, data)
     manifest.update({"content_id": article["content_id"], "canonical_url": article["canonical_url"]})
+    if not manifest.get("published_at") and article.get("published_at"):
+        manifest["published_at"] = article["published_at"]
     write_json(manifest_path, manifest)
 
     def fetch_media(media_url: str) -> tuple[bytes, str, str]:
@@ -1262,21 +1297,22 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
             processed = True
             break
     if not processed:
-        active_batch_states = {
-            "queued",
-            "discovering",
-            "processing",
-            "waiting_for_authorization",
-            "waiting_for_reauthentication",
-        }
-        for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
+        actionable_batch_states = {"queued", "discovering", "processing"}
+        waiting_batch_states = {"waiting_for_authorization", "waiting_for_reauthentication"}
+        official_batches: list[tuple[int, Path]] = []
+        for manifest_path in jobs_root.glob("batch-????????T??????Z-????????/manifest.json"):
             manifest = read_json_if_valid(manifest_path)
-            if not manifest:
+            if not manifest or manifest.get("kind") != "batch":
                 continue
-            if manifest.get("kind") == "batch" and manifest.get("status") in active_batch_states:
-                process_official_batch(manifest_path, root)
-                processed = True
-                break
+            status = manifest.get("status")
+            if status in actionable_batch_states:
+                official_batches.append((0, manifest_path))
+            elif status in waiting_batch_states:
+                official_batches.append((1, manifest_path))
+        if official_batches:
+            _, manifest_path = min(official_batches, key=lambda item: (item[0], item[1].name))
+            process_official_batch(manifest_path, root)
+            processed = True
     statuses = []
     for pattern in ("content-????????T??????Z-????????/manifest.json", "batch-????????T??????Z-????????/manifest.json"):
         for manifest_path in jobs_root.glob(pattern):
@@ -2345,6 +2381,58 @@ def recent_channel_author(captured_after_ms: int) -> dict | None:
     return {"username": rows[0][0], "nickname": rows[0][1], "avatar": rows[0][2], "signature": ""}
 
 
+def known_official_account_for_source(source_url: str, root: Path) -> dict | None:
+    source = canonical_url(source_url)
+    candidates: dict[str, dict] = {}
+    database = Path(
+        os.environ.get(
+            "WECHAT_CHANNELS_DATA_DB",
+            str(Path.home() / ".local" / "share" / "wx_channels_download" / "v260810" / "runtime" / "data.db"),
+        )
+    )
+    if database.is_file():
+        try:
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT COALESCE(h.source_url, ''), h.url, COALESCE(a.nickname, '')
+                    FROM browse_history AS h
+                    JOIN browse_history_account AS ha ON ha.browse_history_id = h.id
+                    JOIN account AS a ON a.id = ha.account_id
+                    WHERE h.type = 'article' AND ha.role = 'author'
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            rows = []
+        for captured_source, article_url, nickname in rows:
+            if canonical_url(str(captured_source or "")) != source:
+                continue
+            metadata = official_article_metadata(html.unescape(str(article_url or "")))
+            biz = str(metadata.get("biz") or "")
+            if biz:
+                candidates[biz] = {
+                    "biz": biz,
+                    "account_id": hashlib.sha256(f"wechat_official_account\0{biz}".encode()).hexdigest()[:16],
+                    "account_name": str(nickname or ""),
+                }
+    for manifest_path in (root / "jobs").glob("batch-????????T??????Z-????????/manifest.json"):
+        candidate = read_json_if_valid(manifest_path)
+        if not candidate or canonical_url(str(candidate.get("source") or "")) != source:
+            continue
+        account = candidate.get("account") or {}
+        biz = str(account.get("biz") or "")
+        if biz:
+            candidates[biz] = {
+                "biz": biz,
+                "account_id": str(account.get("account_id") or "")
+                or hashlib.sha256(f"wechat_official_account\0{biz}".encode()).hexdigest()[:16],
+                "account_name": str(account.get("name") or candidates.get(biz, {}).get("account_name") or ""),
+            }
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates.values()))
+
+
 def resolve_channel_author_from_url(share_url: str, deadline: float | None = None) -> dict:
     """Resolve a Channels share URL without opening or controlling WeChat."""
     safe_url = validate_https_url(share_url, {"weixin.qq.com", "channels.weixin.qq.com"})
@@ -2681,6 +2769,14 @@ def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Pa
             continue
         existing = existing_official_content(root, str(item["content_id"]))
         if existing:
+            existing_path = root / "jobs" / str(existing["job_id"]) / "manifest.json"
+            existing_changed = False
+            for field in ("title", "published_at"):
+                if not existing.get(field) and item.get(field):
+                    existing[field] = item[field]
+                    existing_changed = True
+            if existing_changed:
+                write_json(existing_path, existing)
             item.update(
                 {
                     "child_job_id": existing["job_id"],
@@ -2691,7 +2787,14 @@ def submit_official_batch_children(manifest: dict, manifest_path: Path, root: Pa
             submitted = submit_content(str(item["canonical_url"]), root)
             child_path = root / str(submitted["manifest"])
             child = json.loads(child_path.read_text(encoding="utf-8"))
-            child.update({"content_id": item["content_id"], "parent_job_id": manifest["job_id"]})
+            child.update(
+                {
+                    "content_id": item["content_id"],
+                    "parent_job_id": manifest["job_id"],
+                    "title": item.get("title") or child.get("title"),
+                    "published_at": item.get("published_at"),
+                }
+            )
             write_json(child_path, child)
             item.update({"child_job_id": submitted["job_id"], "result": "processing"})
         manifest.update({"status": "processing", "updated_at": utc_now()})
@@ -2705,7 +2808,9 @@ def discover_official_batch(manifest: dict, manifest_path: Path, root: Path) -> 
         raise ArchiveError("unexpected_content_type", f"文章响应类型不是 HTML：{content_type}")
     reference = official_article_metadata(final_url, data)
     if not reference["biz"]:
-        raise ArchiveError("official_account_not_identified", "参考文章没有识别出公众号。", 69)
+        reference = known_official_account_for_source(str(manifest["source"]), root) or reference
+    if not reference["biz"]:
+        raise ArchiveError("official_account_not_identified", "参考文章和本次采集窗口都没有唯一识别出公众号。", 69)
     manifest["account"] = {"name": reference["account_name"], "account_id": reference["account_id"]}
     pagination = manifest["pagination"]
     offset = int(pagination.get("next_offset") or 0)
