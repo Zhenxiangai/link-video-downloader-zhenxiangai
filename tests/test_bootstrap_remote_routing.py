@@ -27,6 +27,24 @@ class BootstrapRemoteRoutingTests(unittest.TestCase):
         self.assertIn("enable-capture) enable_capture", self.source)
         self.assertIn("disable-capture) disable_capture", self.source)
 
+    def test_official_account_backend_is_pinned_to_the_zhenxiangai_release(self):
+        self.assertIn('release="v260810-zhenxiangai.1"', self.source)
+        self.assertIn(
+            "https://github.com/Zhenxiangai/wx_channels_download/releases/download/"
+            "v260810-zhenxiangai.1/"
+            "wx_video_download_v260810-zhenxiangai.1_darwin_arm64.zip",
+            self.source,
+        )
+        self.assertIn(
+            'release_sha256="c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b"',
+            self.source,
+        )
+        self.assertIn(
+            'backend_sha256="ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09"',
+            self.source,
+        )
+        self.assertNotIn("github.com/ltaoo/wx_channels_download/releases/download", self.source)
+
     def test_explicit_recovery_window_wraps_probe_in_capture_cleanup(self):
         source = BOOTSTRAP.read_text(encoding="utf-8")
         self.assertIn("recover-channel-session) recover_channels_session", source)
