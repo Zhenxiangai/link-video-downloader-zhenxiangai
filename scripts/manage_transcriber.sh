@@ -77,6 +77,9 @@ install_worker() {
     plist_add "Add :EnvironmentVariables:WECHAT_FFMPEG string $ffmpeg_path"
     plist_add "Add :EnvironmentVariables:WECHAT_WHISPER_CLI string $whisper_path"
     plist_add "Add :EnvironmentVariables:WECHAT_WHISPER_MODEL string $model_path"
+    if [ -n "${WECHAT_MP_TOKEN_FILE:-}" ]; then
+        plist_add "Add :EnvironmentVariables:WECHAT_MP_TOKEN_FILE string $WECHAT_MP_TOKEN_FILE"
+    fi
     plist_add "Add :RunAtLoad bool true"
     plist_add "Add :KeepAlive bool true"
     plist_add "Add :ProcessType string Background"

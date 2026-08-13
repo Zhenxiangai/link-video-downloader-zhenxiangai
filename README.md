@@ -47,7 +47,7 @@
 
 ### 1. 识别链接
 
-Hermes 会先判断链接来自微信公众号、视频号、B站、小红书还是抖音，并为这次请求创建一个独立任务。
+Hermes 会先判断链接来自微信公众号、视频号、B站、小红书还是抖音。公众号文章链接默认先盘点当前可见历史、不下载；其他单链接会为本次请求创建独立内容任务。
 
 ### 2. 检查登录和授权
 
@@ -124,7 +124,7 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 在 Hermes 所在的 Mac 上运行：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.1/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 安装 Skill 后，可以直接对 Hermes 说：
@@ -184,7 +184,9 @@ Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进�
 - 三个平台合计 24 个正式产物，文件大小和校验值均与任务清单一致；
 - 小红书的单条图文和视频流程也已完成真实验证。
 
-`v1.2.0` 新增微信公众号归档：一个公开文章入口已稳定盘点 33 页、325 条历史记录；3 篇样本完成 HTML、Markdown 和 36 张配图归档，验证码页为 0，归档中的会话值扫描命中为 0。325 条是历史清单数量，不代表已下载全部 325 篇正文。
+`v1.2.0` 新增微信公众号归档：先盘点当前账户可见历史且不创建文章子任务，用户确认数量后再沿用同一父任务，从最新开始保存正文、HTML、配图和 manifest。公开发布前只用隔离小样本验收，不做全量历史。
+
+`v1.2.1` 为公众号本地接口生成私有 Token，并固定使用已移除公共 CA/私钥的核心版本；安装不会自动启用抓包或改动系统代理。
 
 这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
 
@@ -224,6 +226,13 @@ sh ./scripts/bootstrap.sh status
 ```bash
 sh ./scripts/bootstrap.sh inspect-creator '<视频号、B站或抖音链接>'
 sh ./scripts/bootstrap.sh download-creator-plan '<上一步任务编号>' '<确认数量>'
+```
+
+公众号历史同样先盘点、再确认数量：
+
+```bash
+WECHAT_ARCHIVE_ENABLED=1 "$PYTHON" "$SCRIPT" extract-official-account --url '<公众号文章链接>'
+sh ./scripts/bootstrap.sh download-official-account-plan '<同一父任务编号>' '<确认篇数>'
 ```
 
 ### 常见任务状态

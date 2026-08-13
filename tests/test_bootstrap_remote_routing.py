@@ -28,19 +28,19 @@ class BootstrapRemoteRoutingTests(unittest.TestCase):
         self.assertIn("disable-capture) disable_capture", self.source)
 
     def test_official_account_backend_is_pinned_to_the_zhenxiangai_release(self):
-        self.assertIn('release="v260810-zhenxiangai.1"', self.source)
+        self.assertIn('release="v260810-zhenxiangai.2"', self.source)
         self.assertIn(
             "https://github.com/Zhenxiangai/wx_channels_download/releases/download/"
-            "v260810-zhenxiangai.1/"
-            "wx_video_download_v260810-zhenxiangai.1_darwin_arm64.zip",
+            "v260810-zhenxiangai.2/"
+            "wx_video_download_v260810-zhenxiangai.2_darwin_arm64.zip",
             self.source,
         )
         self.assertIn(
-            'release_sha256="c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b"',
+            'release_sha256="e03b1bf8ec13d2412be8f10f6702bed6769dac75211be5023c71ea33ff871c4c"',
             self.source,
         )
         self.assertIn(
-            'backend_sha256="ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09"',
+            'backend_sha256="fa9f56d119556ac4fff263871cd73add3217ec0b84950276ac645778f9020575"',
             self.source,
         )
         self.assertNotIn("github.com/ltaoo/wx_channels_download/releases/download", self.source)

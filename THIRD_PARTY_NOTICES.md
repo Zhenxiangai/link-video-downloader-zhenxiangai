@@ -17,9 +17,9 @@ A pinned derivative runtime subset is distributed under `vendor/transparent-core
 - Upstream source: <https://github.com/ltaoo/wx_channels_download>
 - ZhenxiangAI fork: <https://github.com/Zhenxiangai/wx_channels_download>
 - Audited fork revision: `8d011dce8796ce597fe603af3778f1b7131718be`
-- Downloaded release: `v260810-zhenxiangai.1`
-- Release archive SHA-256: `c4b0a046a708e2dec0a8da92d594363af9de21e8963ec2a548f2bed03480155b`
-- Binary SHA-256: `ab71889551945ce80a93f3cc20736749a2f47d240a4b391f11d9d8492c821c09`
+- Downloaded release: `v260810-zhenxiangai.2`
+- Release archive SHA-256: `e03b1bf8ec13d2412be8f10f6702bed6769dac75211be5023c71ea33ff871c4c`
+- Binary SHA-256: `fa9f56d119556ac4fff263871cd73add3217ec0b84950276ac645778f9020575`
 - License: MIT with Commons Clause License Condition v1.0
 
 The repository does not bundle this source or binary; bootstrap downloads the fixed ZhenxiangAI fork release. That release is built from the audited fork revision while preserving the upstream copyright and license. The Commons Clause restricts selling software whose value derives substantially from this component; obtain separate permission when commercial use may fall within that condition.
