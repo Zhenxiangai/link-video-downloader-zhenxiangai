@@ -1931,11 +1931,12 @@ def resolve_channel_author_from_url(share_url: str) -> dict:
         profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": metadata["eid"]}))
         contact = (profile.get("object") or {}).get("contact") or {}
         if contact.get("username"):
-            profile_avatar = str(contact.get("headUrl") or contact.get("avatar") or "").strip()
-            if not public_avatar or profile_avatar != public_avatar:
+            public_nickname = str(metadata.get("nickname") or "").strip()
+            profile_nickname = str(contact.get("nickname") or "").strip()
+            if public_nickname and profile_nickname != public_nickname:
                 raise ArchiveError(
                     "channel_author_selection_required",
-                    "公开分享页缺少头像，或与详情接口返回的博主头像不一致，无法安全自动绑定；请用户在手机端选择正确博主。",
+                    "公开分享页与详情接口返回的博主昵称不一致，无法安全自动绑定；请用户在手机端选择正确博主。",
                     66,
                 )
             return {

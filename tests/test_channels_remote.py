@@ -43,34 +43,43 @@ class ChannelsRemoteAccessTests(unittest.TestCase):
         api.assert_called_once_with("/api/channels/feed/profile", query={"eid": "eid-1"})
         run.assert_not_called()
 
-    def test_profile_avatar_mismatch_never_auto_binds(self):
+    def test_direct_profile_same_nickname_allows_avatar_cdn_variant(self):
         mismatch = {**CREATOR, "headUrl": "https://example.com/different.jpg"}
         api_payload = {"errCode": 0, "data": {"object": {"contact": mismatch}}}
         with (
             patch.object(archive, "resolve_channel_share_metadata", return_value={"eid": "eid-1", "nickname": "新博主", "avatar": CREATOR["avatar"]}),
             patch.object(archive, "channels_api", return_value=api_payload),
         ):
-            with self.assertRaises(archive.ArchiveError) as raised:
-                archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
+            creator = archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
 
-        self.assertEqual(raised.exception.code, "channel_author_selection_required")
+        self.assertEqual(creator["username"], "creator@finder")
 
-    def test_profile_missing_avatar_never_auto_binds_when_public_avatar_exists(self):
+    def test_direct_profile_same_nickname_allows_missing_profile_avatar(self):
         missing = {**CREATOR, "headUrl": "", "avatar": ""}
         api_payload = {"errCode": 0, "data": {"object": {"contact": missing}}}
         with (
             patch.object(archive, "resolve_channel_share_metadata", return_value={"eid": "eid-1", "nickname": "新博主", "avatar": CREATOR["avatar"]}),
             patch.object(archive, "channels_api", return_value=api_payload),
         ):
-            with self.assertRaises(archive.ArchiveError) as raised:
-                archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
+            creator = archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
 
-        self.assertEqual(raised.exception.code, "channel_author_selection_required")
+        self.assertEqual(creator["username"], "creator@finder")
 
-    def test_missing_public_avatar_never_auto_binds_profile(self):
+    def test_direct_profile_same_nickname_allows_missing_public_avatar(self):
         api_payload = {"errCode": 0, "data": {"object": {"contact": CREATOR}}}
         with (
             patch.object(archive, "resolve_channel_share_metadata", return_value={"eid": "eid-1", "nickname": "新博主", "avatar": ""}),
+            patch.object(archive, "channels_api", return_value=api_payload),
+        ):
+            creator = archive.resolve_channel_author_from_url("https://weixin.qq.com/sph/example")
+
+        self.assertEqual(creator["username"], "creator@finder")
+
+    def test_direct_profile_nickname_mismatch_never_auto_binds(self):
+        mismatch = {**CREATOR, "nickname": "另一个博主"}
+        api_payload = {"errCode": 0, "data": {"object": {"contact": mismatch}}}
+        with (
+            patch.object(archive, "resolve_channel_share_metadata", return_value={"eid": "eid-1", "nickname": "新博主", "avatar": CREATOR["avatar"]}),
             patch.object(archive, "channels_api", return_value=api_payload),
         ):
             with self.assertRaises(archive.ArchiveError) as raised:
