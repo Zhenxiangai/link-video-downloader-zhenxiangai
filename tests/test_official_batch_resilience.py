@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "wechat_archive.py"
@@ -152,6 +152,21 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             session_fetch.assert_called_once_with(source)
             archive_html.assert_called_once()
             finalize.assert_called_once()
+
+    def test_session_backend_request_uses_non_browser_local_header(self):
+        source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers.get_content_type.return_value = "text/html"
+        response.headers.get.return_value = None
+        response.read.return_value = b"<html></html>"
+        opener = MagicMock()
+        opener.open.return_value = response
+        with patch.object(archive, "build_opener", return_value=opener):
+            archive.fetch_official_article_with_session(source)
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header("X-wxmp-local-client"), "1")
+        self.assertIsNone(request.get_header("Origin"))
 
     def test_official_article_metadata_extracts_wechat_publish_timestamp(self):
         source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"

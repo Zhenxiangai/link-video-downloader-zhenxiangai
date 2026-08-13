@@ -249,7 +249,7 @@ def fetch_limited(
 def fetch_official_article_with_session(raw_url: str) -> tuple[bytes, str, str]:
     safe_url = validate_https_url(raw_url, ARTICLE_HOSTS)
     endpoint = CHANNELS_API_BASE + "/api/mp/article/content?" + urlencode({"url": safe_url})
-    request = Request(endpoint, headers={"Accept": "text/html,application/xhtml+xml"})
+    request = Request(endpoint, headers={"Accept": "text/html,application/xhtml+xml", "X-WXMP-Local-Client": "1"})
     try:
         with build_opener(ProxyHandler({})).open(request, timeout=25) as response:
             content_type = response.headers.get_content_type()
