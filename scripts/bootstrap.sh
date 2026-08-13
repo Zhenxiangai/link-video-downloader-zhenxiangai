@@ -143,11 +143,6 @@ doctor() {
     else
         echo "transparent_core=missing"
     fi
-    if has hermes && hermes computer-use status >/dev/null 2>&1; then
-        echo "computer_use=installed"
-    else
-        echo "computer_use=missing"
-    fi
 }
 
 install_dependencies() {
@@ -197,13 +192,6 @@ install_core() {
     }
     mv "$source_core" "$core_root"
     find "$temporary_dir" -depth -delete
-}
-
-install_computer_use() {
-    hermes tools enable computer_use
-    if ! hermes computer-use status >/dev/null 2>&1; then
-        hermes computer-use install
-    fi
 }
 
 write_backend_config() {
@@ -340,7 +328,6 @@ install_all() {
     check_platform
     has hermes || fail "hermes_missing"
     [ -n "$python_bin" ] && [ -x "$python_bin" ] || fail "python_missing"
-    install_computer_use
     install_dependencies
     install_model
     install_core
@@ -569,7 +556,7 @@ authorize_unattended() {
     printf 'cert_name=%s\n' "$unattended_cert_name" >"$unattended_marker"
     unattended_ready || fail "unattended_authorization_incomplete"
     echo "unattended_authorization=ready"
-    echo "next_action=future Channels links can use automatic task-local capture"
+    echo "next_action=certificate ready for an explicitly initiated, user-present manual recovery only"
 }
 
 revoke_unattended() {
@@ -761,21 +748,18 @@ capture_python() {
 
 inspect_channel_author() {
     [ -n "${1:-}" ] || fail "missing Channels share URL"
-    capture_python inspect-channel-author --author "$1"
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" inspect-channel-author --author "$1"
 }
 
 download_channel_plan() {
     [ -n "${1:-}" ] || fail "missing batch Job ID"
     [ -n "${2:-}" ] || fail "missing download count"
-    capture_python download-channel-plan --job-id "$1" --limit "$2"
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-channel-plan --job-id "$1" --limit "$2"
 }
 
 inspect_creator() {
     [ -n "${1:-}" ] || fail "missing creator share URL"
-    case "$1" in
-        https://weixin.qq.com/*|https://channels.weixin.qq.com/*) capture_python inspect-creator --url "$1" ;;
-        *) WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" inspect-creator --url "$1" ;;
-    esac
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" inspect-creator --url "$1"
 }
 
 download_creator_plan() {
@@ -786,7 +770,7 @@ download_creator_plan() {
 
 download_channel_url() {
     [ -n "${1:-}" ] || fail "missing Channels share URL"
-    capture_python download-channel-url --url "$1"
+    WECHAT_ARCHIVE_ENABLED=1 "$python_bin" "$script_dir/wechat_archive.py" download-channel-url --url "$1"
 }
 
 status() {

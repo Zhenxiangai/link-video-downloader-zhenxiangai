@@ -49,9 +49,9 @@ PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
 "$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
-`extract` immediately returns one `content-*` job and a relative manifest path. The persistent content worker then downloads, archives, and transcribes sequentially. After the user completes one-time unattended Channels authorization, each Channels task temporarily enables compatibility routing and restores the original proxy afterward.
+`extract` immediately returns one `content-*` job and a relative manifest path. The persistent content worker then downloads, archives, and transcribes sequentially. After the initial Channels session is established, routine requests reuse that local session without enabling capture or changing the proxy.
 
-`download-channel-url` automatically opens WeChat and submits one Channels link. Channels, Bilibili, and Douyin creator-history batches use two steps: inventory and freeze the visible list, ask how many items the user wants, then submit that count to the same parent Job only after the reply. See [SKILL.md](./SKILL.md) for routing.
+`download-channel-url` never opens or controls WeChat. Channels, Bilibili, and Douyin creator-history batches use two steps: inventory and freeze the visible list, ask how many items the user wants, then submit that count to the same parent Job only after the reply. For Channels, both known and newly shared creators first reuse the existing local session. A new public share contributes its nickname and avatar for exact matching against the search session. Successful identities are stored in a user-private local registry. This is conditional unattended operation: the Mac must be online and the required search and creator-feed session capabilities must still be live. See [SKILL.md](./SKILL.md) for routing.
 
 ## Content packages
 
@@ -87,7 +87,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.1.0/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.0/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -95,9 +95,10 @@ Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and 
 ## Authentication and approvals
 
 - Bilibili, Xiaohongshu, and Douyin can import a platform-specific persistent Cookie jar from an already signed-in Safari or Chrome only after explicit approval; a new Mac does not need Chrome installed for this. Ordinary jobs read the jar, not the browser.
-- Sending a Channels link authorizes the local CA and capture proxy for that task only. With no existing system proxy, the task restores the previous network settings and removes its CA when it ends. If Clash Verge Rev's Mihomo core is already the system proxy, the Skill automatically loads an in-memory route that exists only for the task: the system proxy port and persistent user configuration never change, and the original runtime configuration is restored afterward. Other system proxies without a controllable routing API remain untouched and stop with a clear error. User intervention is limited to WeChat login, macOS permission dialogs, an unsupported existing proxy, or a video Hermes cannot open automatically.
+- Sending a Channels link authorizes processing that public link only; it does not authorize enabling capture, changing the proxy, or controlling WeChat. Routine work reuses the local session without capture. If the required session expires, the Job remains waiting. Later, while physically at the Mac, the user may explicitly start the temporary recovery listener and manually open the original link in WeChat. Capture is then stopped immediately and the previous network state is restored. Hermes never clicks, types, reads chats, or opens the content on the user's behalf.
 - A job keeps the same ID when it enters `waiting_for_authorization` or `waiting_for_reauthentication`.
 - Cookies, account credentials, browser profiles, CA private keys, and proxy snapshots never enter Git, content packages, manifests, or Hermes responses.
+- `channel-session-status=author_search_ready` proves only that author search is responding. New-link identity resolution and creator-feed access are verified by the real task and are never inferred from that probe.
 
 ## Current acceptance status
 
@@ -108,6 +109,8 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.0.3` improves Channels authorization recovery and supports task-only in-memory routing when Clash Verge Rev/Mihomo is already active: it does not disable or replace the system proxy, does not write the user's persistent configuration, and restores the original runtime afterward.
 
 `v1.1.0` adds creator-history batches for WeChat Channels, Bilibili, and Douyin. It inventories the currently visible total without downloading, then archives and transcribes the newest user-confirmed count. Real small-batch acceptance covered 280 available Channels videos, 913 available Bilibili videos, and a Douyin creator inventory; each platform completed two videos and three transcript formats, with all 24 formal artifacts matching the manifest byte counts and SHA-256 hashes.
+
+`v1.2.0` adds conditional mobile-submitted Channels creator tasks, a private creator registry, low-frequency same-Job recovery, capability-graded session status, and removes all default WeChat UI automation and Computer Use setup. Automated tests cover these controls. At development acceptance time, the live search session had expired, so real new-creator inventory remains explicitly unverified until a user-present manual session recovery is performed.
 
 Future versions plan to add Xiaohongshu creator batches and WeChat Official Account article capture. This release does not claim either history-batch capability.
 

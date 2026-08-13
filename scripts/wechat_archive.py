@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import html
 import http.cookiejar
@@ -19,17 +20,17 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
 TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"
@@ -92,6 +93,23 @@ def atomic_write(path: Path, data: bytes) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_bytes(data)
     os.replace(temporary, path)
+
+
+def private_atomic_write(path: Path, data: bytes) -> None:
+    """Atomically write a user-private file without a permissive interval."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -727,14 +745,10 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
                     "status": "waiting_for_authorization" if channels or not cookie_jar.is_file() else "waiting_for_reauthentication",
                     "updated_at": utc_now(),
                     "next_action": (
-                        "用户发送此视频号链接已授权当前任务临时启用本机 CA 与采集代理。"
-                        "请自动启用采集、在已登录微信中打开或刷新该视频，并恢复同一 Job ID；"
-                        "任务成功或失败后立即关闭采集；如本任务改动了系统代理，则恢复原设置。"
-                        "只有遇到微信未登录、macOS 权限弹窗或无法自动打开视频时才请求用户介入。"
-                        "如果无法自动打开，只向用户发送下面的操作，不要追加排障说明：\n\n"
-                        "请复制这个视频号链接，粘贴到这台 Mac 的微信聊天中，然后点开并播放：\n\n"
-                        f"{manifest.get('source')}\n\n"
-                        "视频开始播放后，请回复“已打开”，我会继续同一个任务。"
+                        (
+                            "视频号会话当前不可用，原任务已保留。请等用户方便使用 Mac 时，由用户在 Mac 微信中手动打开下面的原链接并停留 10 秒；后台检测到会话恢复后会继续同一 Job：\n\n"
+                            f"{manifest.get('source')}"
+                        )
                         if channels
                         else "请在已授权的 Safari 或 Chrome 登录该平台后，导入持久 Cookie 并继续原任务。"
                     ),
@@ -758,12 +772,116 @@ def process_content_job(manifest_path: Path, root: Path) -> dict:
         return manifest
 
 
+def parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def read_json_if_valid(path: Path) -> dict | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def resume_creator_batch_children(manifest: dict, manifest_path: Path, root: Path) -> tuple[dict, int]:
+    resumed = 0
+    for child_id in manifest.get("child_job_ids") or []:
+        child_path = root / "jobs" / str(child_id) / "manifest.json"
+        child = read_json_if_valid(child_path)
+        if not child or child.get("platform") != "wechat_channels":
+            continue
+        if child.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}:
+            continue
+        child.update({"status": "queued", "updated_at": utc_now()})
+        child.pop("next_action", None)
+        child.pop("error", None)
+        write_json(child_path, child)
+        resumed += 1
+    if resumed:
+        manifest.pop("next_action", None)
+        manifest.pop("error", None)
+        manifest.pop("session_retry_after", None)
+    return refresh_creator_batch(manifest, manifest_path, root), resumed
+
+
+def resume_waiting_channel_creators_once(root: Path, retry_interval: int = 900) -> int:
+    """Low-frequency, non-UI retry for one waiting creator task.
+
+    The retry only calls the existing local Channels backend. It never opens or
+    controls WeChat. A still-unavailable session is retried no more than once
+    per ``retry_interval`` seconds.
+    """
+    if retry_interval < 60:
+        raise ArchiveError("invalid_retry_interval", "视频号会话重试间隔不能小于 60 秒。")
+    now = datetime.now(timezone.utc)
+    for manifest_path in sorted((root / "jobs").glob("batch-????????T??????Z-????????/manifest.json")):
+        manifest = read_json_if_valid(manifest_path)
+        if not manifest:
+            continue
+        if (
+            manifest.get("kind") != "creator_batch"
+            or manifest.get("platform") != "wechat_channels"
+            or manifest.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}
+        ):
+            continue
+        retry_after = parse_utc_timestamp(manifest.get("session_retry_after"))
+        if retry_after is not None and retry_after > now:
+            continue
+        source = str(manifest.get("source") or "")
+        selected = bool(manifest.get("selection") or manifest.get("child_job_ids"))
+        if not selected and not source:
+            continue
+        next_retry = (now + timedelta(seconds=retry_interval)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        try:
+            manifest["session_retry_after"] = next_retry
+            write_json(manifest_path, manifest)
+            if selected:
+                _, resumed = resume_creator_batch_children(manifest, manifest_path, root)
+                return 1 if resumed else 0
+            result = inspect_channel_creator(
+                source,
+                root,
+                existing_job=(str(manifest.get("job_id") or manifest_path.parent.name), manifest_path.parent, manifest),
+            )
+        except Exception as exc:
+            try:
+                refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+                refreshed["session_retry_after"] = next_retry
+                refreshed["last_retry_error"] = {
+                    "code": getattr(exc, "code", "unexpected_error"),
+                    "message": str(exc),
+                }
+                write_json(manifest_path, refreshed)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            return 0
+        if result.get("status") != "waiting_for_authorization":
+            return 1
+        try:
+            refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+            refreshed["session_retry_after"] = next_retry
+            write_json(manifest_path, refreshed)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        return 0
+    return 0
+
+
 def content_worker_once(root: Path) -> tuple[dict, bool]:
     jobs_root = root / "jobs"
     jobs_root.mkdir(parents=True, exist_ok=True)
+    resumed_creators = resume_waiting_channel_creators_once(root)
     progress_channel_jobs_once(root)
     for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = read_json_if_valid(manifest_path)
+        if not manifest:
+            continue
         if manifest.get("kind") == "creator_batch" and manifest.get("status") in {
             "submitting",
             "processing",
@@ -774,9 +892,11 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
                 submit_creator_batch_children(manifest, manifest_path, root)
             else:
                 refresh_creator_batch(manifest, manifest_path, root)
-    processed = False
+    processed = bool(resumed_creators)
     for manifest_path in sorted(jobs_root.glob("content-????????T??????Z-????????/manifest.json")):
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = read_json_if_valid(manifest_path)
+        if not manifest:
+            continue
         if manifest.get("status") in {"queued", "downloading", "transcribing"}:
             process_content_job(manifest_path, root)
             processed = True
@@ -790,7 +910,9 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
             "waiting_for_reauthentication",
         }
         for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = read_json_if_valid(manifest_path)
+            if not manifest:
+                continue
             if manifest.get("kind") == "batch" and manifest.get("status") in active_batch_states:
                 process_official_batch(manifest_path, root)
                 processed = True
@@ -798,7 +920,9 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
     statuses = []
     for pattern in ("content-????????T??????Z-????????/manifest.json", "batch-????????T??????Z-????????/manifest.json"):
         for manifest_path in jobs_root.glob(pattern):
-            statuses.append(json.loads(manifest_path.read_text(encoding="utf-8")).get("status"))
+            manifest = read_json_if_valid(manifest_path)
+            if manifest:
+                statuses.append(manifest.get("status"))
     counts = {status: statuses.count(status) for status in sorted(set(statuses)) if status}
     worker = {
         "schema_version": 1,
@@ -935,10 +1059,28 @@ def resume_job(job_id: str, root: Path) -> dict:
     if not manifest_path.is_file():
         raise ArchiveError("job_not_found", "没有找到该任务。", 66)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("kind") != "content" or manifest.get("platform") != "wechat_channels":
-        raise ArchiveError("job_not_resumable", "只有完成视频号采集授权后才使用手动恢复。", 66)
+    if manifest.get("platform") != "wechat_channels":
+        raise ArchiveError("job_not_resumable", "只有视频号授权等待任务可以手动恢复。", 66)
     if manifest.get("status") not in {"waiting_for_authorization", "waiting_for_reauthentication"}:
         raise ArchiveError("job_not_waiting", "该任务当前不在授权等待状态。", 66)
+
+    if manifest.get("kind") == "creator_batch":
+        if manifest.get("selection") or manifest.get("child_job_ids"):
+            manifest, _ = resume_creator_batch_children(manifest, manifest_path, root)
+            return {
+                "ok": manifest.get("status") != "failed",
+                "job_id": job_id,
+                "status": manifest["status"],
+                "platform": manifest.get("platform"),
+            }
+        source = str(manifest.get("source") or "")
+        if not source:
+            raise ArchiveError("job_source_missing", "任务缺少原始视频号链接。", 70)
+        result = inspect_channel_creator(source, root, existing_job=(job_id, manifest_path.parent, manifest))
+        return result
+
+    if manifest.get("kind") != "content":
+        raise ArchiveError("job_not_resumable", "该视频号任务类型不支持手动恢复。", 66)
     manifest.update({"status": "queued", "updated_at": utc_now()})
     manifest.pop("next_action", None)
     manifest.pop("error", None)
@@ -1477,7 +1619,12 @@ def refresh_creator_batch(manifest: dict, manifest_path: Path, root: Path) -> di
         if not child_path.is_file():
             processing += 1
             continue
-        child = json.loads(child_path.read_text(encoding="utf-8"))
+        child = read_json_if_valid(child_path)
+        if not child:
+            item["result"] = "failed"
+            item["error_code"] = "child_manifest_invalid"
+            failed += 1
+            continue
         if child.get("status") == "completed":
             item["result"] = "completed"
             completed += 1
@@ -1716,7 +1863,7 @@ def safe_channel_name(value: str, fallback: str) -> str:
     return (re.sub(r"[\\/:\x00-\x1f]", "_", value).strip(" .")[:180] or fallback)
 
 
-def resolve_channel_share_eid(share_url: str) -> str:
+def resolve_channel_share_metadata(share_url: str) -> dict:
     short_uri = urlsplit(share_url).path.rstrip("/").rsplit("/", 1)[-1]
     page_url = f"https://channels.weixin.qq.com/finder-preview/pages/sph?id={short_uri}"
     request = Request(
@@ -1730,10 +1877,20 @@ def resolve_channel_share_eid(share_url: str) -> str:
             payload = json.loads(response.read().decode())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ArchiveError("channels_share_resolve_failed", f"视频号分享链接解析失败：{exc}", 69) from exc
-    eid = (((payload.get("data") or {}).get("sceneInfo") or {}).get("dynamicExportId"))
+    data = payload.get("data") or {}
+    eid = ((data.get("sceneInfo") or {}).get("dynamicExportId"))
     if payload.get("errCode") != 0 or not eid:
         raise ArchiveError("channels_share_resolve_failed", str(payload.get("errMsg") or "分享链接没有返回视频标识。"), 69)
-    return str(eid)
+    author = data.get("authorInfo") or {}
+    return {
+        "eid": str(eid),
+        "nickname": str(author.get("nickname") or ""),
+        "avatar": str(author.get("headImgUrl") or ""),
+    }
+
+
+def resolve_channel_share_eid(share_url: str) -> str:
+    return str(resolve_channel_share_metadata(share_url)["eid"])
 
 
 def recent_channel_author(captured_after_ms: int) -> dict | None:
@@ -1766,43 +1923,58 @@ def recent_channel_author(captured_after_ms: int) -> dict | None:
 
 
 def resolve_channel_author_from_url(share_url: str) -> dict:
+    """Resolve a Channels share URL without opening or controlling WeChat."""
     safe_url = validate_https_url(share_url, {"weixin.qq.com", "channels.weixin.qq.com"})
-    eid = resolve_channel_share_eid(safe_url)
-    deep_link = "weixin://biz/finder/openFinderFeed/" + quote(f"exportId={eid}&actionType=0", safe="")
-    captured_after_ms = int(time.time() * 1000)
-    for attempt in range(60):
-        if attempt % 20 == 0:
-            try:
-                subprocess.run(
-                    ["/usr/bin/open", deep_link],
-                    check=True,
-                    timeout=10,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+    metadata = resolve_channel_share_metadata(safe_url)
+    public_avatar = str(metadata.get("avatar") or "").strip()
+    try:
+        profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": metadata["eid"]}))
+        contact = (profile.get("object") or {}).get("contact") or {}
+        if contact.get("username"):
+            profile_avatar = str(contact.get("headUrl") or contact.get("avatar") or "").strip()
+            if not public_avatar or profile_avatar != public_avatar:
+                raise ArchiveError(
+                    "channel_author_selection_required",
+                    "公开分享页缺少头像，或与详情接口返回的博主头像不一致，无法安全自动绑定；请用户在手机端选择正确博主。",
+                    66,
                 )
-            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-                raise ArchiveError("channels_open_failed", "无法自动在微信中打开该视频号链接。", 69) from exc
-        try:
-            profile = channels_payload_data(channels_api("/api/channels/feed/profile", query={"eid": eid}))
-            contact = (profile.get("object") or {}).get("contact") or {}
-            if contact.get("username"):
-                return {
-                    "username": contact["username"],
-                    "nickname": contact.get("nickname", ""),
-                    "avatar": contact.get("headUrl", ""),
-                    "signature": contact.get("signature", ""),
-                }
-        except ArchiveError as exc:
-            if exc.code != "channels_authorization_required":
-                raise
-        captured = recent_channel_author(captured_after_ms)
-        if captured:
-            return captured
-        time.sleep(0.5)
+            return {
+                "username": contact["username"],
+                "nickname": contact.get("nickname", ""),
+                "avatar": contact.get("headUrl", ""),
+                "signature": contact.get("signature", ""),
+            }
+    except ArchiveError as exc:
+        if exc.code != "channels_authorization_required":
+            raise
+
+    nickname = str(metadata.get("nickname") or "").strip()
+    avatar = str(metadata.get("avatar") or "").strip()
+    if nickname:
+        if not avatar:
+            raise ArchiveError(
+                "channel_author_selection_required",
+                "公开分享页缺少可核对的博主头像，不能只按昵称自动绑定；请用户在手机端选择正确博主。",
+                66,
+            )
+        search = search_channel_author(nickname)
+        exact = [candidate for candidate in search["candidates"] if candidate.get("nickname") == nickname]
+        avatar_matches = [candidate for candidate in exact if avatar and candidate.get("avatar") == avatar]
+        if avatar and exact and not avatar_matches:
+            raise ArchiveError(
+                "channel_author_selection_required",
+                "公开分享页头像与同名搜索结果不一致，请用户在手机端选择正确博主。",
+                66,
+            )
+        choices = avatar_matches if avatar else exact
+        if len(choices) == 1:
+            return choices[0]
+        if len(choices) > 1:
+            raise ArchiveError("channel_author_selection_required", "公开分享页对应多个同名视频号，请用户在手机端选择正确博主。", 66)
+
     raise ArchiveError(
         "channels_authorization_required",
-        "自动打开未建立视频号采集会话。请使用已授权的 Hermes Computer Use 把下面的原链接发到微信文件传输助手并点开：\n\n"
-        f"{safe_url}",
+        "视频号会话当前无法从分享链接唯一识别博主。任务已保留；请用户方便使用 Mac 时，在 Mac 微信中手动打开原链接后继续。",
         69,
     )
 
@@ -1828,7 +2000,8 @@ def download_channel_url(url: str, root: Path) -> dict:
     submitted = submit_content(url, root)
     manifest_path = root / "jobs" / submitted["job_id"] / "manifest.json"
     try:
-        resolve_channel_author_from_url(url)
+        creator = resolve_channel_author_from_url(url)
+        register_channel_creator(root, url, creator)
         manifest = process_content_job(manifest_path, root)
     except ArchiveError as exc:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1993,7 +2166,9 @@ def existing_official_content(root: Path, content_id: str) -> dict | None:
     candidates = []
     pattern = "content-????????T??????Z-????????/manifest.json"
     for manifest_path in (root / "jobs").glob(pattern):
-        child = json.loads(manifest_path.read_text(encoding="utf-8"))
+        child = read_json_if_valid(manifest_path)
+        if not child:
+            continue
         if child.get("platform") == "wechat_official_account" and child.get("content_id") == content_id:
             candidates.append(child)
     if not candidates:
@@ -2012,7 +2187,11 @@ def refresh_official_batch(manifest: dict, manifest_path: Path, root: Path) -> d
         if not child_id or not child_path.is_file():
             processing += 1
             continue
-        child = json.loads(child_path.read_text(encoding="utf-8"))
+        child = read_json_if_valid(child_path)
+        if not child:
+            item.update({"result": "failed", "error_code": "child_manifest_invalid"})
+            failed += 1
+            continue
         status = child.get("status")
         if status == "completed":
             item.update({"result": "completed", "error_code": None})
@@ -2176,11 +2355,77 @@ def channel_author_result(root: Path, manifest: dict) -> dict:
     return result
 
 
-def resolve_channel_author(author: str) -> dict:
+def channel_creator_registry_path(root: Path) -> Path:
+    return root / "state" / "channels-creators.json"
+
+
+def load_channel_creator_registry(root: Path) -> dict:
+    path = channel_creator_registry_path(root)
+    if not path.is_file():
+        return {"schema_version": 1, "updated_at": None, "creators": {}, "sources": {}}
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArchiveError("channels_creator_registry_invalid", "视频号博主注册表无法读取。", 70) from exc
+    if not isinstance(registry.get("creators"), dict) or not isinstance(registry.get("sources"), dict):
+        raise ArchiveError("channels_creator_registry_invalid", "视频号博主注册表格式错误。", 70)
+    return registry
+
+
+def register_channel_creator(root: Path, source: str, creator: dict) -> None:
+    username = str(creator.get("username") or "")
+    if not username:
+        raise ArchiveError("channel_author_not_found", "视频号博主身份为空。", 66)
+    canonical_source = canonical_url(source) if source.startswith("https://") else source
+    path = channel_creator_registry_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        with os.fdopen(descriptor, "r+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            registry = load_channel_creator_registry(root)
+            registry["creators"][username] = {
+                "username": username,
+                "nickname": str(creator.get("nickname") or ""),
+                "avatar": str(creator.get("avatar") or ""),
+                "signature": str(creator.get("signature") or ""),
+                "last_source": canonical_source,
+                "updated_at": utc_now(),
+            }
+            registry["sources"][canonical_source] = username
+            registry["updated_at"] = utc_now()
+            private_atomic_write(path, (json.dumps(registry, ensure_ascii=False, indent=2) + "\n").encode())
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def registered_channel_creator(root: Path, source: str) -> dict | None:
+    registry = load_channel_creator_registry(root)
+    canonical_source = canonical_url(source) if source.startswith("https://") else source
+    username = registry["sources"].get(canonical_source)
+    creator = registry["creators"].get(username) if username else None
+    return dict(creator) if isinstance(creator, dict) else None
+
+
+def resolve_channel_author(author: str, root: Path | None = None) -> dict:
+    root = root or archive_root()
     if author.startswith("https://"):
-        return resolve_channel_author_from_url(author)
+        registered = registered_channel_creator(root, author)
+        if registered:
+            return registered
+        creator = resolve_channel_author_from_url(author)
+        register_channel_creator(root, author, creator)
+        return creator
     if author.endswith("@finder"):
-        return {"username": author, "nickname": ""}
+        registered = load_channel_creator_registry(root)["creators"].get(author)
+        return dict(registered) if isinstance(registered, dict) else {"username": author, "nickname": ""}
     search = search_channel_author(author)
     candidates = search["candidates"]
     exact = [candidate for candidate in candidates if candidate["nickname"] == author]
@@ -2189,6 +2434,7 @@ def resolve_channel_author(author: str) -> dict:
         raise ArchiveError("channel_author_not_found", "没有找到该视频号博主。", 66)
     if len(choices) != 1:
         raise ArchiveError("channel_author_selection_required", "博主名称不唯一，请使用视频号分享链接。", 66)
+    register_channel_creator(root, author, choices[0])
     return choices[0]
 
 
@@ -2214,7 +2460,7 @@ def discover_channel_author(selected: dict) -> tuple[list[list[dict]], int]:
 
 
 def inspect_channel_author(author: str, root: Path) -> dict:
-    selected = resolve_channel_author(author)
+    selected = resolve_channel_author(author, root)
     pages, discovered = discover_channel_author(selected)
     objects = [obj for page in pages for obj in page]
     available = len(objects)
@@ -2256,13 +2502,42 @@ def inspect_channel_author(author: str, root: Path) -> dict:
     }
 
 
-def inspect_channel_creator(author: str, root: Path) -> dict:
-    selected = resolve_channel_author(author)
-    pages, _ = discover_channel_author(selected)
-    objects = [obj for page in pages for obj in page]
-    if not objects:
-        raise ArchiveError("creator_inventory_empty", "该视频号博主当前没有可下载视频。", 66)
-    job_id, job_dir, manifest = new_job(root, "batch", author)
+def inspect_channel_creator(author: str, root: Path, *, existing_job: tuple[str, Path, dict] | None = None) -> dict:
+    job_id, job_dir, manifest = existing_job or new_job(root, "batch", author)
+    manifest.update({"kind": "creator_batch", "platform": "wechat_channels"})
+    try:
+        selected = resolve_channel_author(author, root)
+        pages, _ = discover_channel_author(selected)
+        objects = [obj for page in pages for obj in page]
+        if not objects:
+            raise ArchiveError("creator_inventory_empty", "该视频号博主当前没有可下载视频。", 66)
+    except ArchiveError as exc:
+        retryable = exc.code in {
+            "channels_authorization_required",
+            "channels_backend_unavailable",
+            "channels_share_resolve_failed",
+        }
+        manifest.update(
+            {
+                "status": "waiting_for_authorization" if retryable else "failed",
+                "updated_at": utc_now(),
+                "error": {"code": exc.code, "message": str(exc)},
+            }
+        )
+        if retryable:
+            manifest["next_action"] = "视频号会话暂不可用。任务已保存；请用户方便使用 Mac 时，在 Mac 微信中手动打开原链接并停留 10 秒，然后继续同一任务。"
+        else:
+            manifest["completed_at"] = utc_now()
+            manifest.pop("next_action", None)
+        write_json(job_dir / "manifest.json", manifest)
+        return {
+            "ok": retryable,
+            "job_id": job_id,
+            "status": manifest["status"],
+            "platform": "wechat_channels",
+            "next_action": manifest.get("next_action"),
+            "manifest": archive_relative(root, job_dir / "manifest.json"),
+        }
     items = [
         {
             "id": str(obj.get("id") or ""),
@@ -2292,6 +2567,7 @@ def inspect_channel_creator(author: str, root: Path) -> dict:
             "next_action": f"该博主当前可下载视频共 {len(items)} 个，默认从最新开始。你要下载多少个？",
         }
     )
+    manifest.pop("error", None)
     write_json(job_dir / "manifest.json", manifest)
     return {
         "ok": True,
@@ -2752,6 +3028,42 @@ def job_status(job_id: str, root: Path) -> dict:
     return {"ok": True, "job": manifest}
 
 
+def channel_session_status(root: Path | None = None) -> dict:
+    """Probe the existing local Channels session without opening WeChat."""
+    root = root or archive_root()
+    try:
+        search_channel_author("__hermes_session_probe__")
+    except ArchiveError as exc:
+        if exc.code == "channels_authorization_required":
+            return {
+                "ok": False,
+                "platform": "wechat_channels",
+                "status": "authorization_required",
+                "next_action": "请用户方便使用 Mac 时，在 Mac 微信中手动打开任一视频号链接以恢复会话。",
+            }
+        return {
+            "ok": False,
+            "platform": "wechat_channels",
+            "status": "unavailable",
+            "error": {"code": exc.code, "message": str(exc)},
+        }
+    registry = load_channel_creator_registry(root)
+    registered = len(registry["creators"])
+    return {
+        "ok": True,
+        "platform": "wechat_channels",
+        "status": "author_search_ready",
+        "capabilities": {
+            "author_search": True,
+            "registered_creator_lookup": registered > 0,
+            "creator_feed": False,
+            "new_creator_resolution": False,
+        },
+        "registered_creators": registered,
+        "note": "只证明博主搜索接口可用；分享链接资料和作品列表将在真实任务中分别验证。",
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -2790,6 +3102,7 @@ def build_parser() -> argparse.ArgumentParser:
     cookie_import.add_argument("--browser", required=True, choices=("safari", "chrome"))
     resume = subparsers.add_parser("resume")
     resume.add_argument("--job-id", required=True)
+    subparsers.add_parser("channel-session-status")
     subparsers.add_parser("transcriber-status")
     subparsers.add_parser("content-worker-status")
     status = subparsers.add_parser("status")
@@ -2882,6 +3195,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "resume":
             require_enabled()
             result = resume_job(args.job_id, root)
+        elif args.action == "channel-session-status":
+            require_enabled()
+            result = channel_session_status(root)
         elif args.action == "transcriber-status":
             result = channel_transcriber_status(root)
         elif args.action == "content-worker-status":
