@@ -15,13 +15,13 @@ EXPECTED_FILES = (
 
 
 class VersionedSkillBundleTests(unittest.TestCase):
-    def test_v123_bundle_links_to_the_reviewed_root_files(self):
+    def test_v123_bundle_matches_the_reviewed_root_files(self):
         for relative in EXPECTED_FILES:
             with self.subTest(relative=relative):
                 bundled = BUNDLE_ROOT / relative
                 source = REPOSITORY_ROOT / relative
-                self.assertTrue(bundled.is_symlink())
-                self.assertEqual(bundled.resolve(), source.resolve())
+                self.assertTrue(bundled.is_file())
+                self.assertFalse(bundled.is_symlink())
                 self.assertEqual(bundled.read_bytes(), source.read_bytes())
 
 
