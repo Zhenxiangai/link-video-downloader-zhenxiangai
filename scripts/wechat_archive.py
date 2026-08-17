@@ -30,11 +30,13 @@ from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandle
 
 sys.pycache_prefix = str(Path.home() / "Library" / "Caches" / "wechat-archive" / "pycache")
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 TRANSPARENT_CORE_REVISION = "8c137bf1a56106a050f12567fe0ed587bccea042"
 TRANSPARENT_CORE_SHA256 = "acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 CHANNELS_API_BASE = "http://127.0.0.1:2022"
 CHANNEL_VIDEO_MEDIA_TYPE = 4
+CHANNEL_VIDEO_FINALIZE_WAIT_SECONDS = 10.0
+CHANNEL_VIDEO_FINALIZE_POLL_SECONDS = 0.25
 ARTICLE_HOSTS = {"mp.weixin.qq.com"}
 MEDIA_HOST_SUFFIXES = (".qpic.cn", ".qq.com", ".weixin.qq.com")
 XHS_MEDIA_HOST_SUFFIXES = (".xhscdn.com", ".xhsimg.com")
@@ -968,6 +970,7 @@ def process_content_job(
     manifest_path: Path,
     root: Path,
     resume_waiting: bool = False,
+    resume_delivery: bool = False,
     deadline: float | None = None,
     start_only: bool = False,
 ) -> dict:
@@ -986,6 +989,26 @@ def process_content_job(
                 manifest.pop("next_action", None)
                 manifest.pop("error", None)
                 write_json(manifest_path, manifest)
+        if resume_delivery:
+            manifest = read_json_if_valid(manifest_path) or {}
+            recoverable = (
+                manifest.get("platform") == "wechat_channels"
+                and manifest.get("status") == "failed"
+                and (manifest.get("error") or {}).get("code") == "channel_video_missing"
+            )
+            if not recoverable or len(channel_local_video_candidates(manifest, manifest_path, root)) != 1:
+                return manifest
+            manifest.update(
+                {
+                    "status": "downloading",
+                    "updated_at": utc_now(),
+                    "channel_delivery_recovery": True,
+                }
+            )
+            manifest.pop("completed_at", None)
+            manifest.pop("failed_stage", None)
+            manifest.pop("error", None)
+            write_json(manifest_path, manifest)
         return _process_content_job_unlocked(
             manifest_path,
             root,
@@ -1290,11 +1313,49 @@ def recover_channel_session(
         time.sleep(min(poll_interval, remaining))
 
 
+def refresh_creator_parent_for_child(child: dict, root: Path) -> bool:
+    if child.get("status") != "completed":
+        return False
+    parent_id = str(child.get("parent_job_id") or "")
+    if not JOB_ID_RE.fullmatch(parent_id) or not parent_id.startswith("batch-"):
+        return False
+    parent_path = root / "jobs" / parent_id / "manifest.json"
+    parent = read_json_if_valid(parent_path)
+    if not parent or parent.get("kind") != "creator_batch" or parent.get("platform") != "wechat_channels":
+        return False
+    refreshed = refresh_creator_batch(parent, parent_path, root)
+    return refreshed.get("status") == "completed"
+
+
+def reconcile_terminal_creator_batches_once(root: Path) -> int:
+    jobs_root = root / "jobs"
+    for parent_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
+        parent = read_json_if_valid(parent_path)
+        if not parent or parent.get("kind") != "creator_batch" or parent.get("status") != "completed_with_failures":
+            continue
+        needs_refresh = False
+        for item in (parent.get("inventory") or {}).get("items") or []:
+            if item.get("error_code") != "channel_video_missing" or not item.get("child_job_id"):
+                continue
+            child_path = jobs_root / str(item["child_job_id"]) / "manifest.json"
+            child = read_json_if_valid(child_path)
+            if child and child.get("status") == "completed":
+                needs_refresh = True
+                break
+        if not needs_refresh:
+            continue
+        refreshed = refresh_creator_batch(parent, parent_path, root)
+        if refreshed.get("status") == "completed":
+            return 1
+    return 0
+
+
 def content_worker_once(root: Path) -> tuple[dict, bool]:
     jobs_root = root / "jobs"
     jobs_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(jobs_root, 0o700)
     resumed_creators = resume_waiting_channel_creators_once(root)
+    reconciled_creators = reconcile_terminal_creator_batches_once(root)
     progress_channel_jobs_once(root)
     for manifest_path in sorted(jobs_root.glob("batch-????????T??????Z-????????/manifest.json")):
         manifest = read_json_if_valid(manifest_path)
@@ -1310,13 +1371,29 @@ def content_worker_once(root: Path) -> tuple[dict, bool]:
                 submit_creator_batch_children(manifest, manifest_path, root)
             else:
                 refresh_creator_batch(manifest, manifest_path, root)
-    processed = bool(resumed_creators)
+    processed = bool(resumed_creators or reconciled_creators)
     for manifest_path in sorted(jobs_root.glob("content-????????T??????Z-????????/manifest.json")):
         manifest = read_json_if_valid(manifest_path)
         if not manifest:
             continue
         if manifest.get("status") in {"queued", "downloading", "transcribing"}:
             process_content_job(manifest_path, root)
+            processed = True
+            break
+    if not processed:
+        for manifest_path in sorted(jobs_root.glob("content-????????T??????Z-????????/manifest.json")):
+            manifest = read_json_if_valid(manifest_path)
+            recoverable = (
+                manifest
+                and manifest.get("platform") == "wechat_channels"
+                and manifest.get("status") == "failed"
+                and (manifest.get("error") or {}).get("code") == "channel_video_missing"
+                and len(channel_local_video_candidates(manifest, manifest_path, root)) == 1
+            )
+            if not recoverable:
+                continue
+            recovered = process_content_job(manifest_path, root, resume_delivery=True)
+            refresh_creator_parent_for_child(recovered, root)
             processed = True
             break
     if not processed:
@@ -1721,6 +1798,7 @@ def finalize_video_content(
     manifest["outputs"].extend(transcripts)
     manifest.update({"status": "completed", "updated_at": utc_now(), "completed_at": utc_now()})
     manifest.pop("error", None)
+    manifest.pop("channel_delivery_recovery", None)
     write_json(manifest_path, manifest)
     return manifest
 
@@ -2042,6 +2120,7 @@ def _refresh_creator_batch_unlocked(manifest: dict, manifest_path: Path, root: P
             continue
         if child.get("status") == "completed":
             item["result"] = "completed"
+            item.pop("error_code", None)
             completed += 1
         elif child.get("status") == "failed":
             item["result"] = "failed"
@@ -2638,6 +2717,10 @@ def process_channel_content(
     deadline: float | None = None,
 ) -> dict:
     work_dir = manifest_path.parent / "work"
+    if manifest.get("channel_delivery_recovery") is True:
+        videos = wait_for_channel_video([], manifest, manifest_path, root, deadline=deadline)
+        info = {"id": manifest["content_id"], "title": manifest["title"], "webpage_url": manifest["source"]}
+        return finalize_video_content(manifest, manifest_path, root, info, videos[0], "wechat_channels_backend")
     task_ids = manifest.get("upstream_task_ids") or []
     if not task_ids:
         obj = manifest.get("channel_object") or {}
@@ -2677,17 +2760,102 @@ def process_channel_content(
         write_json(manifest_path, manifest)
         return manifest
 
-    videos = []
+    videos = wait_for_channel_video(records, manifest, manifest_path, root, deadline=deadline)
+    info = {"id": manifest["content_id"], "title": manifest["title"], "webpage_url": manifest["source"]}
+    return finalize_video_content(manifest, manifest_path, root, info, videos[0], "wechat_channels_backend")
+
+
+def usable_channel_video(path: Path) -> bool:
+    try:
+        return path.suffix.lower() == ".mp4" and path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def channel_video_within(path: Path, allowed_root: Path) -> Path | None:
+    try:
+        if path.is_symlink():
+            return None
+        resolved_root = allowed_root.resolve(strict=True)
+        resolved_path = path.resolve(strict=True)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved_path if usable_channel_video(resolved_path) else None
+
+
+def channel_local_video_candidates(manifest: dict, manifest_path: Path, root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    work_dir = manifest_path.parent / "work"
+    if work_dir.is_dir() and not work_dir.is_symlink():
+        for path in work_dir.rglob("*.mp4"):
+            trusted = channel_video_within(path, work_dir)
+            if trusted:
+                candidates.append(trusted)
+
+    output_root = root / "content" / PLATFORM_DIRS["wechat_channels"]
+    for output in manifest.get("outputs") or []:
+        if output.get("role") != "video" or not output.get("path"):
+            continue
+        trusted = channel_video_within(root / str(output["path"]), output_root)
+        if trusted:
+            candidates.append(trusted)
+
+    title = safe_content_title(str(manifest.get("title") or "未命名视频"), "未命名视频")
+    content_id = str(manifest.get("content_id") or "")
+    if content_id:
+        archived = output_root / f"{title}--{content_id}" / "video.mp4"
+        trusted = channel_video_within(archived, output_root)
+        if trusted:
+            candidates.append(trusted)
+
+    unique = {str(path): path for path in candidates}
+    return list(unique.values())
+
+
+def channel_video_candidates(records: list[dict], manifest: dict, manifest_path: Path, root: Path) -> list[Path]:
+    candidates = channel_local_video_candidates(manifest, manifest_path, root)
+    work_dir = manifest_path.parent / "work"
     for record in records:
         for item in record.get("files") or []:
             path = (Path(item.get("download_dir") or "") / (item.get("name") or "")).expanduser().absolute()
-            if path.is_file() and path.suffix.lower() == ".mp4":
-                videos.append(path)
-    videos = list(dict.fromkeys(videos))
-    if len(videos) != 1:
-        raise ArchiveError("channel_video_missing", "视频号后端未返回唯一的 MP4 文件。", 69)
-    info = {"id": manifest["content_id"], "title": manifest["title"], "webpage_url": manifest["source"]}
-    return finalize_video_content(manifest, manifest_path, root, info, videos[0], "wechat_channels_backend")
+            trusted = channel_video_within(path, work_dir)
+            if trusted:
+                candidates.append(trusted)
+    unique = {str(path): path for path in candidates}
+    return list(unique.values())
+
+
+def wait_for_channel_video(
+    records: list[dict],
+    manifest: dict,
+    manifest_path: Path,
+    root: Path,
+    deadline: float | None = None,
+) -> list[Path]:
+    end = time.monotonic() + max(0.0, CHANNEL_VIDEO_FINALIZE_WAIT_SECONDS)
+    if deadline is not None:
+        end = min(end, deadline)
+    previous_state: tuple[str, int, int] | None = None
+    while True:
+        videos = channel_video_candidates(records, manifest, manifest_path, root)
+        if len(videos) == 1:
+            try:
+                stat = videos[0].stat()
+                current_state = (str(videos[0]), stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                current_state = None
+            if current_state is not None and current_state == previous_state:
+                return videos
+            previous_state = current_state
+        else:
+            previous_state = None
+        if len(videos) > 1:
+            raise ArchiveError("channel_video_ambiguous", "视频号后端返回了多个 MP4 文件，无法安全选择。", 69)
+        now = time.monotonic()
+        if now >= end:
+            raise ArchiveError("channel_video_missing", "视频号后端完成后仍未找到稳定且唯一的 MP4 文件。", 69)
+        time.sleep(min(CHANNEL_VIDEO_FINALIZE_POLL_SECONDS, end - now))
 
 
 def official_batch_page_items(page: dict) -> list[dict]:

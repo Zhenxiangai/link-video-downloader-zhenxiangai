@@ -567,7 +567,8 @@ remove_capture_certificate() {
     fi
     rm -f "$cert_output"
     [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$keychain" >/dev/null || cleanup_failed=1
-    rm -f "$backend_runtime/certs/$cert_name.pem" "$backend_runtime/certs/$cert_name.key" || cleanup_failed=1
+    cert_slug=$(printf '%s' "$cert_name" | tr '[:upper:]' '[:lower:]')
+    rm -f "$backend_runtime/certs/$cert_slug.pem" "$backend_runtime/certs/$cert_slug.key" || cleanup_failed=1
     return "$cleanup_failed"
 }
 
@@ -575,9 +576,11 @@ unattended_ready() {
     [ -f "$unattended_marker" ] || return 1
     cert_name=$(sed -n 's/^cert_name=//p' "$unattended_marker" | head -n 1)
     [ "$cert_name" = "$unattended_cert_name" ] || return 1
-    [ -f "$backend_runtime/certs/$cert_name.pem" ] || return 1
-    [ -f "$backend_runtime/certs/$cert_name.key" ] || return 1
-    [ -n "$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)" ]
+    cert_file="$backend_runtime/certs/$cert_name.pem"
+    cert_key="$backend_runtime/certs/$cert_name.key"
+    [ -f "$cert_file" ] || return 1
+    [ -f "$cert_key" ] || return 1
+    security verify-cert -l -c "$cert_file" -k "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1
 }
 
 authorize_unattended() {
@@ -606,7 +609,8 @@ revoke_unattended() {
     cert_name="$unattended_cert_name"
     installed=$(security find-certificate -a -c "$cert_name" -p "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)
     [ -z "$installed" ] || security delete-certificate -c "$cert_name" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
-    rm -f "$backend_runtime/certs/$cert_name.pem" "$backend_runtime/certs/$cert_name.key" "$unattended_marker"
+    cert_slug=$(printf '%s' "$cert_name" | tr '[:upper:]' '[:lower:]')
+    rm -f "$backend_runtime/certs/$cert_slug.pem" "$backend_runtime/certs/$cert_slug.key" "$unattended_marker"
     echo "unattended_authorization=revoked"
 }
 
@@ -671,11 +675,15 @@ enable_capture() {
         cert_name="wechat_archive_$(id -u)_$(date -u +%Y%m%dT%H%M%SZ)"
         echo "cert_name=$cert_name" >>"$proxy_snapshot"
         api_post /api/proxy/certificate/generate "{\"name\":\"$cert_name\",\"valid_years\":1,\"install\":false,\"restart\":false}"
-        cert_file="$backend_runtime/certs/$cert_name.pem"
+        cert_slug=$(printf '%s' "$cert_name" | tr '[:upper:]' '[:lower:]')
+        cert_file="$backend_runtime/certs/$cert_slug.pem"
+        cert_key="$backend_runtime/certs/$cert_slug.key"
         [ -f "$cert_file" ] || fail "generated_certificate_not_found"
+        [ -f "$cert_key" ] || fail "generated_certificate_key_not_found"
         security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$cert_file"
     fi
-    proxy_json=$("$python_bin" - "$service" "$capture_route" "$cert_name" "$cert_file" "$backend_runtime/certs/$cert_name.key" <<'PY'
+    cert_key=${cert_key:-"$backend_runtime/certs/$cert_name.key"}
+    proxy_json=$("$python_bin" - "$service" "$capture_route" "$cert_name" "$cert_file" "$cert_key" <<'PY'
 import json
 import sys
 
