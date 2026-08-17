@@ -1,0 +1,1 @@
+../../../../scripts/wechat_archive.py

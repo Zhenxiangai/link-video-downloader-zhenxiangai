@@ -414,7 +414,10 @@ class ChannelsWaitingJobWorkerTests(unittest.TestCase):
             child.update({"platform": "wechat_channels", "status": "downloading", "channel_object": {"id": "frozen"}})
             archive.write_json(child_dir / "manifest.json", child)
             with patch.object(archive, "process_content_job", return_value={"status": "downloading"}) as process:
-                resumed = archive.resume_waiting_channel_content(root, deadline=130.0)
+                resumed = archive.resume_waiting_channel_content(
+                    root,
+                    deadline=archive.time.monotonic() + 30.0,
+                )
             self.assertEqual(resumed, 1)
             process.assert_called_once()
             self.assertTrue(process.call_args.kwargs["start_only"])
