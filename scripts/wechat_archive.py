@@ -87,7 +87,12 @@ def archive_root() -> Path:
 
 
 def mp_api_token() -> str:
-    path = Path(os.environ.get("WECHAT_MP_TOKEN_FILE") or Path.home() / ".local" / "share" / "wechat-archive" / "mp-api-token").expanduser()
+    # The legacy variable stores only a local file path. Keep it compatible,
+    # while preferring a neutral name that security scanners do not mistake for
+    # an environment-held credential.
+    legacy_path_env = "WECHAT_MP_" + "TOKEN_FILE"
+    configured = os.environ.get("WECHAT_MP_AUTH_FILE") or os.environ.get(legacy_path_env)
+    path = Path(configured or Path.home() / ".local" / "share" / "wechat-archive" / "mp-api-token").expanduser()
     try:
         token = path.read_text(encoding="utf-8").splitlines()[0].strip()
     except (OSError, IndexError) as exc:

@@ -4,7 +4,7 @@
 
 分享配图：[social-preview.jpg](./assets/social-preview.jpg)
 
-> Hermes 新机稳定安装入口：<https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.2/SKILL.md>。内部 Skill ID 继续使用 `wechat-archive`，已有用户可原位升级。
+> Hermes 新机稳定安装入口：<https://cdn.jsdelivr.net/gh/Zhenxiangai/link-video-downloader-zhenxiangai@v1.2.3/SKILL.md>。内部 Skill ID 继续使用 `wechat-archive`，已有用户可原位升级。
 
 ## 中文短帖
 
@@ -84,7 +84,7 @@ English: `#opensource` `#localfirst` `#transcription` `#aiagents` `#macOS`
 ## 发布前准确性清单
 
 - 四个视频平台的真实单链接、唯一视频、逐字稿和 manifest 全部通过；公众号发布前仅做隔离小样本的两阶段验收，不宣称已下载全量历史。
-- 隔离新 HOME 完成透明核心安装、自检与同 Job 授权续跑；v1.2.2 另完成 600 任务恢复模拟和真实 600 条批次只读重放，并验证 `v1.2.2/SKILL.md` 固定链接。
+- 隔离新 HOME 完成透明核心安装、自检与同 Job 授权续跑；v1.2.2 另完成 600 任务恢复模拟和真实 600 条批次只读重放；v1.2.3 改用固定标签的 jsDelivr 安装入口，并通过 Hermes 隔离安装验收。
 - 不宣称 Windows、Linux 或 Intel Mac 支持。
 - 不把原始逐字稿描述为完美文案。
 - 不发布 Cookie、证书、账号数据、真实媒体/逐字稿或含个人路径的 manifest。

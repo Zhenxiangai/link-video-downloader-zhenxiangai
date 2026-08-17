@@ -17,6 +17,25 @@ SPEC.loader.exec_module(archive)
 
 
 class OfficialBatchResilienceTests(unittest.TestCase):
+    def test_mp_api_token_prefers_neutral_auth_file_name_and_keeps_legacy_compatibility(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            auth_file = Path(temporary) / "auth-file"
+            legacy_file = Path(temporary) / "legacy-file"
+            auth_file.write_text("auth-value\n", encoding="utf-8")
+            legacy_file.write_text("legacy-value\n", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "WECHAT_MP_AUTH_FILE": str(auth_file),
+                    "WECHAT_MP_TOKEN_FILE": str(legacy_file),
+                },
+            ):
+                self.assertEqual(archive.mp_api_token(), "auth-value")
+
+            with patch.dict(os.environ, {"WECHAT_MP_TOKEN_FILE": str(legacy_file)}, clear=True):
+                self.assertEqual(archive.mp_api_token(), "legacy-value")
+
     def build_official_history_db(self, path: Path, accounts: list[tuple[str, str, str, int]]) -> None:
         with sqlite3.connect(path) as connection:
             connection.executescript(

@@ -14,7 +14,7 @@ core_sha256="acccec7f474bfc605fe01113e2d06b28908c1602e877c5aa0985db39d6cb20d2"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 hermes_home=${HERMES_HOME:-"$HOME/.hermes"}
 archive_root=${WECHAT_ARCHIVE_ROOT:-"$HOME/Documents/WeChatArchive"}
-mp_token_file=${WECHAT_MP_TOKEN_FILE:-"$HOME/.local/share/wechat-archive/mp-api-token"}
+mp_auth_file=${WECHAT_MP_AUTH_FILE:-${WECHAT_MP_TOKEN_FILE:-"$HOME/.local/share/wechat-archive/mp-api-token"}}
 backend_root=${WECHAT_CHANNELS_HOME:-"$HOME/.local/share/wx_channels_download/$release"}
 backend_bin="$backend_root/wx_video_download"
 backend_config="$backend_root/config.wechat-archive.yaml"
@@ -364,7 +364,7 @@ install_all() {
     install_backend_service
     WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" \
         sh "$script_dir/manage_transcriber.sh" install
-    WECHAT_WORKER_KIND=content WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" WECHAT_MP_TOKEN_FILE="$mp_token_file" \
+    WECHAT_WORKER_KIND=content WECHAT_PYTHON="$python_bin" WECHAT_ARCHIVE_ROOT="$archive_root" WECHAT_WHISPER_MODEL="$model_path" WECHAT_MP_AUTH_FILE="$mp_auth_file" \
         sh "$script_dir/manage_transcriber.sh" install
     status
 }
