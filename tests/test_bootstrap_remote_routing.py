@@ -70,8 +70,29 @@ class BootstrapRemoteRoutingTests(unittest.TestCase):
         self.assertNotIn("2>/dev/null || true)", body)
         self.assertIn("security find-certificate -a -c \"$cert_name\"", body)
         self.assertIn("security find-certificate -a \"$keychain\"", body)
+        self.assertIn("tr '[:upper:]' '[:lower:]'", body)
+        self.assertIn('rm -f "$backend_runtime/certs/$cert_slug.pem"', body)
         self.assertIn("return 1", body)
         self.assertLess(body.index("return 1"), body.index('rm -f "$backend_runtime/certs/'))
+
+    def test_unattended_certificate_readiness_verifies_the_certificate_file(self):
+        body = self.function_body("unattended_ready", "authorize_unattended")
+        self.assertIn('cert_file="$backend_runtime/certs/$cert_name.pem"', body)
+        self.assertIn('cert_key="$backend_runtime/certs/$cert_name.key"', body)
+        self.assertIn(
+            'security verify-cert -l -c "$cert_file" -k "$HOME/Library/Keychains/login.keychain-db"',
+            body,
+        )
+        self.assertNotIn('security find-certificate -a -c "$cert_name"', body)
+
+    def test_ephemeral_certificate_uses_backend_normalized_file_names(self):
+        body = self.function_body("enable_capture", "restore_proxy")
+        ephemeral = body.split('cert_name="wechat_archive_', 1)[1]
+        self.assertIn("tr '[:upper:]' '[:lower:]'", ephemeral)
+        self.assertIn('cert_file="$backend_runtime/certs/$cert_slug.pem"', ephemeral)
+        self.assertIn('cert_key="$backend_runtime/certs/$cert_slug.key"', ephemeral)
+        self.assertIn('[ -f "$cert_key" ] || fail "generated_certificate_key_not_found"', ephemeral)
+        self.assertIn('cert_key=${cert_key:-"$backend_runtime/certs/$cert_name.key"}', body)
 
 
 if __name__ == "__main__":

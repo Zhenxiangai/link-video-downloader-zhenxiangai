@@ -88,7 +88,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.1/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.2/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -116,6 +116,8 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.2.0` also adds WeChat Official Account archiving. It inventories the currently visible history without creating article children, then reuses the same parent Job to archive the newest user-confirmed count with HTML, Markdown, images, and manifests. Public-release acceptance uses only an isolated small sample, not a full-history run.
 
 `v1.2.1` generates a private token for the local Official Account API and pins the hardened core release with the public CA/private key removed. Installation does not enable capture or change the system proxy.
+
+`v1.2.2` fixes false Channels failures when the backend is complete before its MP4 becomes stably visible. Finalization now waits for a bounded interval, accepts only one non-empty and size-stable MP4 from controlled job or existing-output locations, recovers idempotently when a local file appears later, and reconciles the terminal creator parent. Release evidence includes a 600-job real-finalization simulation and a read-only replay of one real 600-item batch, where all 41 historical false failures resolved to one unique local candidate. It also verifies CA certificate readiness and supports backend-normalized certificate filenames. See [`docs/v1.2.2-validation.md`](./docs/v1.2.2-validation.md) for evidence and limitations.
 
 Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 

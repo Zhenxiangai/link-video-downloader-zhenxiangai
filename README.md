@@ -124,7 +124,7 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 在 Hermes 所在的 Mac 上运行：
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.1/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.2/SKILL.md' --category social-media --name wechat-archive --force --yes
 ```
 
 安装 Skill 后，可以直接对 Hermes 说：
@@ -187,6 +187,8 @@ Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进�
 `v1.2.0` 新增微信公众号归档：先盘点当前账户可见历史且不创建文章子任务，用户确认数量后再沿用同一父任务，从最新开始保存正文、HTML、配图和 manifest。公开发布前只用隔离小样本验收，不做全量历史。
 
 `v1.2.1` 为公众号本地接口生成私有 Token，并固定使用已移除公共 CA/私钥的核心版本；安装不会自动启用抓包或改动系统代理。
+
+`v1.2.2` 修复视频号后端已完成但 MP4 尚未稳定可见造成的假失败：交付阶段会有限等待，只接受受控工作目录或既有输出中唯一、非空且大小稳定的 MP4，并在本地文件稍后出现时自动、幂等恢复，同时回写父批次终态。发布验收包含 600 个任务的真实归档收口模拟，以及一次真实 600 条批次的只读重放；41 条历史假失败均被唯一识别。该版本同时修复 CA 证书状态校验和后端规范化证书文件名兼容问题。完整证据与边界见 [`docs/v1.2.2-validation.md`](./docs/v1.2.2-validation.md)。
 
 这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
 

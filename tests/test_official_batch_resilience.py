@@ -108,6 +108,7 @@ class OfficialBatchResilienceTests(unittest.TestCase):
                     "kind": "batch",
                     "platform": "wechat_official_account",
                     "status": "processing",
+                    "selection": {"limit": 1, "order": "newest"},
                     "items": [{"content_id": "article-1", "child_job_id": child_id, "result": "processing"}],
                 }
             )
@@ -218,6 +219,7 @@ class OfficialBatchResilienceTests(unittest.TestCase):
                 "kind": "batch",
                 "platform": "wechat_official_account",
                 "status": "processing",
+                "selection": {"limit": 1, "order": "newest"},
                 "items": [
                     {
                         "content_id": child["content_id"],
@@ -247,6 +249,7 @@ class OfficialBatchResilienceTests(unittest.TestCase):
                 "job_id": parent_dir.name,
                 "kind": "batch",
                 "status": "processing",
+                "selection": {"limit": 1, "order": "newest"},
                 "items": [
                     {
                         "content_id": "article-one",
@@ -260,8 +263,8 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             }
             archive.write_json(parent_path, manifest)
             with patch.object(archive, "refresh_official_batch", side_effect=lambda value, *_: value):
-                archive.submit_official_batch_children(manifest, parent_path, root)
-            child_id = manifest["items"][0]["child_job_id"]
+                updated_batch = archive.submit_official_batch_children(manifest, parent_path, root)
+            child_id = updated_batch["items"][0]["child_job_id"]
             child = json.loads((root / "jobs" / child_id / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(child["published_at"], "2026-08-12T12:00:00Z")
             self.assertEqual(child["title"], "测试文章")
