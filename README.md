@@ -124,10 +124,10 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 在 Hermes 所在的 Mac 上运行：
 
 ```bash
-hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.4/wechat-archive' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.5/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
-该命令使用仓库内固定的 `v1.2.4` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
+该命令使用仓库内固定的 `v1.2.5` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
 
 安装 Skill 后，可以直接对 Hermes 说：
 
@@ -195,6 +195,8 @@ Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进�
 `v1.2.3` 只修复公开安装链路：新增由 GitHub Contents API 提供的版本化 Skill 入口，并将公众号本地授权文件路径改用不会被 Hermes 误判为环境凭据的 `WECHAT_MP_AUTH_FILE`；旧的 `WECHAT_MP_TOKEN_FILE` 仍兼容。归档、下载和恢复逻辑没有变化。
 
 `v1.2.4` 适配当前 Mac 微信的公众号会话变化：底层仅在精确 HTTPS `mp.weixin.qq.com/mp/relatedsearchword` 请求同时具备 8 个必要字段时允许无 Cookie 会话，其余入口仍要求 Cookie；包装层在每页任务状态中持久保存已确认的公众号 `biz`，会话映射过期后可从原游标继续。真实任务盘点到 523 篇，发布前已完成 327 篇正文归档，2 篇历史记录仍存在但正文页不可用，其余任务保留等待会话续期。完整复盘见 [`docs/wechat-official-account-v3-retrospective.md`](./docs/wechat-official-account-v3-retrospective.md)。
+
+`v1.2.5` 收口同一真实任务中发现的文章兼容问题：零验证标记、明确标题、真实 `js_content` 容器且至少成功归档一张图片的纯图片文章不再被短正文门槛误判；旧版 HTTP 微信图片仅在 authority 按 ASCII 小写规范化后精确等于 `mmbiz.qpic.cn` 或 `mmbiz.qpic.cn:80` 时升级为 HTTPS，其他 HTTP、空 userinfo、空端口、尾点主机和越界 authority 仍拒绝。最终 523 条历史记录中，521 篇完成正文、原始 HTML 和媒体归档，2 篇源页面不可用；2828 个输出文件全部通过 SHA-256 复核。匿名化证据与发布后门禁见 [`docs/v1.2.5-validation.md`](./docs/v1.2.5-validation.md)。
 
 这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
 

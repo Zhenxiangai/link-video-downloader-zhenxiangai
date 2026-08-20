@@ -88,7 +88,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.4/wechat-archive' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.5/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -122,6 +122,8 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.2.3` fixes only the public installation path. It adds a versioned Skill entry fetched through the GitHub Contents API and moves the local Official Account authorization-file setting to `WECHAT_MP_AUTH_FILE`; the legacy `WECHAT_MP_TOKEN_FILE` remains compatible.
 
 `v1.2.4` adapts to current WeChat for Mac Official Account sessions. The core accepts a Cookie-less session only for the exact HTTPS `mp.weixin.qq.com/mp/relatedsearchword` path when all eight required fields are present; every other entry still requires a Cookie. The wrapper persists the confirmed account `biz` on every page so a batch can resume from its saved cursor after an in-memory mapping expires. The real release task inventoried 523 articles; 327 had completed before release, two retained history entries had unavailable article pages, and the rest remained queued for session renewal. See [`docs/wechat-official-account-v3-retrospective.md`](./docs/wechat-official-account-v3-retrospective.md).
+
+`v1.2.5` closes two article compatibility gaps found while finishing that real batch. An image-only post is accepted only when it has zero verification markers, a non-generic title, a real `js_content` container, and at least one successfully archived image. A legacy HTTP WeChat media URL is upgraded to HTTPS only when its authority, after ASCII lowercase normalization, is exactly `mmbiz.qpic.cn` or `mmbiz.qpic.cn:80`; all other HTTP, empty userinfo, empty ports, trailing-dot hosts, and out-of-bound authorities remain rejected. Of 523 retained history entries, 521 completed with Markdown, original HTML, and media, while two source pages were unavailable. All 2,828 recorded output files passed SHA-256 verification. See the anonymized evidence and post-release gate in [`docs/v1.2.5-validation.md`](./docs/v1.2.5-validation.md).
 
 Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 
