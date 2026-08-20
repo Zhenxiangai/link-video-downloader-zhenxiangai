@@ -268,6 +268,131 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             markdown = (job_dir / "article.md").read_text(encoding="utf-8")
             self.assertIn("- 发布日期：2026-08-12T12:00:00Z", markdown)
 
+    def test_archive_article_upgrades_exact_wechat_image_host_to_https(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            html_body = b"""
+                <html><head><meta property='og:title' content='test'></head>
+                <body><div id='js_content'>article body text long enough
+                <img data-src='http://mmbiz.qpic.cn/sz_mmbiz_png/example/640'/>
+                </div></body></html>
+            """
+            requested = []
+
+            def media_fetcher(url):
+                requested.append(url)
+                return b"image", "image/png", url
+
+            result = archive.archive_article_html(source, html_body, root, media_fetcher=media_fetcher)
+            manifest = json.loads((Path(result["job_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(requested, ["https://mmbiz.qpic.cn/sz_mmbiz_png/example/640"])
+            self.assertEqual(manifest["media"]["failed"], [])
+            self.assertEqual(len(manifest["media"]["downloaded"]), 1)
+
+    def test_wechat_image_http_upgrade_keeps_strict_host_and_authority_boundary(self):
+        unchanged = [
+            "http://evil.example/image.png",
+            "http://mmbiz.qpic.cn.evil.example/image.png",
+            "http://user@mmbiz.qpic.cn/image.png",
+            "http://@mmbiz.qpic.cn/image.png",
+            "http://:@mmbiz.qpic.cn/image.png",
+            "http://mmbiz.qpic.cn:/image.png",
+            "http://mmbiz.qpic.cn./image.png",
+            "http://mmbiz.qpic.cn:080/image.png",
+            "http://mmbiz.qpic.cn:8080/image.png",
+        ]
+        for url in unchanged:
+            with self.subTest(url=url):
+                self.assertEqual(archive.normalize_official_media_url(url), url)
+        self.assertEqual(
+            archive.normalize_official_media_url("http://mmbiz.qpic.cn:80/image.png"),
+            "https://mmbiz.qpic.cn/image.png",
+        )
+        self.assertEqual(
+            archive.normalize_official_media_url("http://MMBIZ.QPIC.CN/image.png"),
+            "https://mmbiz.qpic.cn/image.png",
+        )
+
+    def test_archive_article_accepts_titled_image_only_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            html_body = """
+                <html><head><meta property='og:title' content='image post'></head>
+                <body><script>var prompt = '请完成验证';</script><div id='js_content'>
+                <img data-src='https://mmbiz.qpic.cn/a.png'/>
+                <img data-src='https://mmbiz.qpic.cn/b.png'/>
+                </div></body></html>
+            """.encode()
+
+            def media_fetcher(url):
+                return b"image", "image/png", url
+
+            result = archive.archive_article_html(source, html_body, root, media_fetcher=media_fetcher)
+            manifest = json.loads((Path(result["job_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(len(manifest["media"]["downloaded"]), 2)
+
+    def test_archive_article_rejects_generic_untitled_or_verification_image_pages(self):
+        source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+        pages = [
+            b"<html><head><meta property='og:title' content='WeChat'></head><body><div id='js_content'><img data-src='https://mmbiz.qpic.cn/a.png'/></div></body></html>",
+            b"<html><body><div id='js_content'><img data-src='https://mmbiz.qpic.cn/a.png'/></div></body></html>",
+            "<html><head><meta property='og:title' content='温馨提示'></head><body><div id='js_content'>请完成验证<img data-src='http://evil.example/pixel.png'/></div></body></html>".encode(),
+            "<html><head><meta property='og:title' content='温馨提示'></head><body><p>请完成验证</p><div id='js_content'><img data-src='https://mmbiz.qpic.cn/a.png'/></div></body></html>".encode(),
+        ]
+        for html_body in pages:
+            with self.subTest(html_body=html_body), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaises(archive.ArchiveError) as caught:
+                    archive.archive_article_html(source, html_body, Path(temporary))
+                self.assertEqual(caught.exception.code, "article_not_found")
+
+    def test_archive_article_image_only_requires_a_downloaded_image(self):
+        source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+        cases = [
+            ("http://evil.example/image.png", lambda _: self.fail("invalid media must not be fetched")),
+            ("https://mmbiz.qpic.cn/empty.png", lambda url: (b"", "image/png", url)),
+            ("https://mmbiz.qpic.cn/not-image.png", lambda url: (b"html", "text/html", url)),
+        ]
+        for media_url, media_fetcher in cases:
+            with self.subTest(media_url=media_url), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                html_body = f"""
+                    <html><head><meta property='og:title' content='image post'></head>
+                    <body><div id='js_content'><img data-src='{media_url}'/></div></body></html>
+                """.encode()
+
+                with self.assertRaises(archive.ArchiveError) as caught:
+                    archive.archive_article_html(source, html_body, root, media_fetcher=media_fetcher)
+
+                self.assertEqual(caught.exception.code, "article_media_incomplete")
+                manifests = list((root / "jobs").glob("article-*/manifest.json"))
+                self.assertEqual(len(manifests), 1)
+                manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+                self.assertEqual(manifest["status"], "failed")
+                self.assertEqual(manifest["error"]["code"], "article_media_incomplete")
+
+    def test_archive_article_isolates_malformed_media_ports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
+            html_body = b"""
+                <html><head><meta property='og:title' content='text post'></head>
+                <body><div id='js_content'>article body text long enough
+                <img data-src='http://mmbiz.qpic.cn:notaport/image.png'/>
+                </div></body></html>
+            """
+
+            result = archive.archive_article_html(source, html_body, root, media_fetcher=lambda _: self.fail("malformed media must not be fetched"))
+            manifest = json.loads((Path(result["job_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(manifest["media"]["downloaded"], [])
+            self.assertEqual([item["error"] for item in manifest["media"]["failed"]], ["invalid_url"])
+
     def test_submit_official_batch_reused_child_backfills_inventory_publish_time(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
