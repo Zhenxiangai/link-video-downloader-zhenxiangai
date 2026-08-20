@@ -237,17 +237,17 @@ proxy:
     port: 9900
 mp:
   enabled: true
-  tokenFilepath: "$mp_token_file"
+  tokenFilepath: "$mp_auth_file"
   refreshskipminutes: 20
 EOF
 }
 
 install_mp_token() {
-    mkdir -p "$(dirname -- "$mp_token_file")"
-    chmod 700 "$(dirname -- "$mp_token_file")"
-    if [ ! -s "$mp_token_file" ]; then
-        [ ! -e "$mp_token_file" ] || fail "mp_token_file_empty: $mp_token_file"
-        "$python_bin" - "$mp_token_file" <<'PY'
+    mkdir -p "$(dirname -- "$mp_auth_file")"
+    chmod 700 "$(dirname -- "$mp_auth_file")"
+    if [ ! -s "$mp_auth_file" ]; then
+        [ ! -e "$mp_auth_file" ] || fail "mp_auth_file_empty: $mp_auth_file"
+        "$python_bin" - "$mp_auth_file" <<'PY'
 import os
 import secrets
 import sys
@@ -258,11 +258,11 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     handle.write(secrets.token_hex(32) + "\n")
 PY
     fi
-    chmod 600 "$mp_token_file"
+    chmod 600 "$mp_auth_file"
 }
 
 ensure_backend_config() {
-    "$python_bin" - "$backend_config" "$mp_token_file" <<'PY'
+    "$python_bin" - "$backend_config" "$mp_auth_file" <<'PY'
 import json
 import os
 import sys

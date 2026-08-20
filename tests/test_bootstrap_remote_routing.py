@@ -45,6 +45,14 @@ class BootstrapRemoteRoutingTests(unittest.TestCase):
         )
         self.assertNotIn("github.com/ltaoo/wx_channels_download/releases/download", self.source)
 
+    def test_bootstrap_uses_the_neutral_auth_file_variable_consistently(self):
+        install_token = self.function_body("install_mp_token", "ensure_backend_config")
+        ensure_config = self.function_body("ensure_backend_config", "install_backend")
+        write_config = self.function_body("write_backend_config", "install_mp_token")
+        for body in (install_token, ensure_config, write_config):
+            self.assertIn("$mp_auth_file", body)
+            self.assertNotIn("$mp_token_file", body)
+
     def test_explicit_recovery_window_wraps_probe_in_capture_cleanup(self):
         source = BOOTSTRAP.read_text(encoding="utf-8")
         self.assertIn("recover-channel-session) recover_channels_session", source)
