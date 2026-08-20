@@ -17,6 +17,57 @@ SPEC.loader.exec_module(archive)
 
 
 class OfficialBatchResilienceTests(unittest.TestCase):
+    def test_discovery_persists_biz_across_pages(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job_id, job_dir, manifest = archive.new_job(root, "batch", "https://mp.weixin.qq.com/s/example")
+            manifest.update(
+                {
+                    "platform": "wechat_official_account",
+                    "account": {"name": "", "account_id": ""},
+                    "pagination": {"pages": 0, "next_offset": 0, "can_continue": True, "complete": False},
+                    "counts": {"discovered": 0},
+                    "items": [],
+                }
+            )
+            manifest_path = job_dir / "manifest.json"
+            archive.write_json(manifest_path, manifest)
+            reference = {"biz": "biz-id", "account_name": "测试公众号", "account_id": "account-id"}
+            page = {"can_msg_continue": 1, "next_offset": 10}
+            first_channels_api = MagicMock(return_value=page)
+            with (
+                patch.object(archive, "fetch_limited", return_value=(b"<html></html>", "text/html", manifest["source"])),
+                patch.object(archive, "official_article_metadata", return_value=reference),
+                patch.object(archive, "channels_api", first_channels_api),
+                patch.object(archive, "official_batch_page_items", return_value=[]),
+            ):
+                updated = archive.discover_official_batch(manifest, manifest_path, root)
+
+            first_channels_api.assert_called_once_with(
+                "/api/mp/msg/list", query={"biz": "biz-id", "offset": 0}
+            )
+            self.assertEqual(updated["account"]["biz"], "biz-id")
+            persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["account"]["biz"], "biz-id")
+
+            empty_reference = {"biz": "", "account_name": "", "account_id": ""}
+            final_page = {"can_msg_continue": 0, "next_offset": 0}
+            resumed_channels_api = MagicMock(return_value=final_page)
+            with (
+                patch.object(archive, "fetch_limited", return_value=(b"<html></html>", "text/html", manifest["source"])),
+                patch.object(archive, "official_article_metadata", return_value=empty_reference),
+                patch.object(archive, "channels_api", resumed_channels_api),
+                patch.object(archive, "official_batch_page_items", return_value=[]),
+            ):
+                resumed = archive.discover_official_batch(persisted, manifest_path, root)
+
+            resumed_channels_api.assert_called_once_with(
+                "/api/mp/msg/list", query={"biz": "biz-id", "offset": 10}
+            )
+            self.assertEqual(resumed["account"]["biz"], "biz-id")
+            self.assertEqual(resumed["status"], "awaiting_download_count")
+            self.assertTrue(resumed["pagination"]["complete"])
+
     def test_mp_api_token_prefers_neutral_auth_file_name_and_keeps_legacy_compatibility(self):
         with tempfile.TemporaryDirectory() as temporary:
             auth_file = Path(temporary) / "auth-file"
