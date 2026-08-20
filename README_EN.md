@@ -88,7 +88,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'https://raw.githubusercontent.com/Zhenxiangai/link-video-downloader-zhenxiangai/v1.2.2/SKILL.md' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.4/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -118,6 +118,10 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.2.1` generates a private token for the local Official Account API and pins the hardened core release with the public CA/private key removed. Installation does not enable capture or change the system proxy.
 
 `v1.2.2` fixes false Channels failures when the backend is complete before its MP4 becomes stably visible. Finalization now waits for a bounded interval, accepts only one non-empty and size-stable MP4 from controlled job or existing-output locations, recovers idempotently when a local file appears later, and reconciles the terminal creator parent. Release evidence includes a 600-job real-finalization simulation and a read-only replay of one real 600-item batch, where all 41 historical false failures resolved to one unique local candidate. It also verifies CA certificate readiness and supports backend-normalized certificate filenames. See [`docs/v1.2.2-validation.md`](./docs/v1.2.2-validation.md) for evidence and limitations.
+
+`v1.2.3` fixes only the public installation path. It adds a versioned Skill entry fetched through the GitHub Contents API and moves the local Official Account authorization-file setting to `WECHAT_MP_AUTH_FILE`; the legacy `WECHAT_MP_TOKEN_FILE` remains compatible.
+
+`v1.2.4` adapts to current WeChat for Mac Official Account sessions. The core accepts a Cookie-less session only for the exact HTTPS `mp.weixin.qq.com/mp/relatedsearchword` path when all eight required fields are present; every other entry still requires a Cookie. The wrapper persists the confirmed account `biz` on every page so a batch can resume from its saved cursor after an in-memory mapping expires. The real release task inventoried 523 articles; 327 had completed before release, two retained history entries had unavailable article pages, and the rest remained queued for session renewal. See [`docs/wechat-official-account-v3-retrospective.md`](./docs/wechat-official-account-v3-retrospective.md).
 
 Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 
