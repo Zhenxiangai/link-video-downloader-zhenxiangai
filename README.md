@@ -2,7 +2,7 @@
 
 # Link Video Downloader by ZhenxiangAI
 
-**把视频链接发给 Hermes，后台完成下载、整理和逐字稿生成。**
+**把视频链接发给 Codex 或 Hermes，后台完成下载、整理和逐字稿生成。**
 
 **微信公众号 · 视频号 · B站 · 小红书 · 抖音**
 
@@ -21,10 +21,10 @@
 
 ## 这个项目能做什么？
 
-这是一个给 Hermes 使用的本地内容归档 Skill。安装并完成首次设置后，你只需要把链接发给 Hermes：
+这是一个可供 Codex 或 Hermes 使用的本地内容归档 Skill。安装并完成首次设置后，你只需要把链接发给已安装该 Skill 的代理：
 
 - 发一个视频链接：下载这一条内容并生成逐字稿。
-- 发一个博主链接并说明“批量抓取”：先告诉你目前能看到多少条，再询问你要下载多少条。
+- 发一个博主链接并说明“批量抓取”：先告诉你目前能看到多少条；B站还会报告合集覆盖和未分类数量，再按数量、合集、指定 BVID、全部或仅缺失项确认范围。
 - 第一次跑通后，只要 Mac 在线且视频号的搜索与作品列表会话仍有效，从手机发送全新或已登记的博主链接即可后台处理；Hermes 不操作微信。
 - 任务进入后台后：自动下载、转写、整理目录，并持续报告进度。
 - 任务完成后：保留原视频、TXT 逐字稿、SRT 字幕、JSON 时间线和任务清单。
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | 微信公众号 | 支持文章 | 支持先盘点、再按确认范围归档 | HTML + Markdown + 配图 |
 | 微信视频号 | 支持 | 支持 | 视频 + 三种逐字稿 |
-| B站 | 支持 | 支持 | 视频 + 三种逐字稿 |
+| B站 | 支持且幂等去重 | 支持数量、合集、指定 BVID、全部或仅缺失项 | 视频 + 三种逐字稿 |
 | 小红书 | 支持图文和视频 | 计划中 | 图文与配图，或视频与逐字稿 |
 | 抖音 | 支持 | 支持 | 视频 + 三种逐字稿 |
 
@@ -47,7 +47,7 @@
 
 ### 1. 识别链接
 
-Hermes 会先判断链接来自微信公众号、视频号、B站、小红书还是抖音。公众号文章链接默认先盘点当前可见历史、不下载；其他单链接会为本次请求创建独立内容任务。
+Hermes 会先判断链接来自微信公众号、视频号、B站、小红书还是抖音。公众号文章链接默认先盘点当前可见历史、不下载；其他单链接会创建内容任务，重复的非失败平台内容标识会复用已有 Job。
 
 ### 2. 检查登录和授权
 
@@ -56,7 +56,7 @@ Hermes 会先判断链接来自微信公众号、视频号、B站、小红书还
 ### 3. 确认抓取范围
 
 - **单链接：** 默认就是下载这一条，不再重复询问。
-- **批量抓取：** 先盘点博主目前可见的视频总数，此时不会下载；然后询问“要下载多少个？”，收到数量后才从最新内容开始执行。
+- **批量抓取：** 先冻结博主目前可见的视频清单，此时不会下载。B站同时冻结合集成员关系，随后可按最新数量、全部、仅缺失项、一个合集或明确 BVID 列表执行。
 
 ### 4. 后台下载
 
@@ -97,7 +97,7 @@ Hermes：任务完成，已生成视频、TXT、SRT 和 JSON。
 ```text
 你：<博主或作品链接>，批量抓取这个博主的视频
 
-Hermes：该博主当前可下载视频共 913 个。默认从最新开始，你要下载多少个？
+Hermes：该博主当前可下载视频共 221 个；11 个合集覆盖 154 个，未分类 67 个。你要按数量、合集、指定作品、全部还是仅缺失项下载？
 
 你：下载 5 个
 
@@ -108,7 +108,7 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 
 ## 使用前需要准备什么？
 
-当前公开版本适用于 **Apple Silicon Mac**，并需要已经安装 Hermes。
+当前公开版本适用于 **Apple Silicon Mac**，可安装到 Codex 或 Hermes。Codex 路径使用系统 `python3`，不依赖 Hermes。
 
 首次使用通常只需要完成一次：
 
@@ -121,13 +121,29 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 
 ## 安装或升级
 
+### Codex
+
+首次安装时，在 Codex 中发送：
+
+```text
+请使用 $skill-installer 安装 GitHub Skill：repo=Zhenxiangai/link-video-downloader-zhenxiangai，path=skill-releases/v1.3.0/wechat-archive，ref=v1.3.0
+```
+
+已安装时，让 Codex 审查后用同一版本包更新 `~/.codex/skills/wechat-archive`。本地任务和归档位于 `~/Documents/WeChatArchive`，不在 Skill 目录中，升级不会删除它们。安装完成后，下一轮对话即可说：
+
+```text
+请检查并完成 Link Video Downloader 的首次设置。
+```
+
+### Hermes
+
 在 Hermes 所在的 Mac 上运行：
 
 ```bash
-hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.5/wechat-archive' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.3.0/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
-该命令使用仓库内固定的 `v1.2.5` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
+该命令使用仓库内固定的 `v1.3.0` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
 
 安装 Skill 后，可以直接对 Hermes 说：
 
@@ -198,6 +214,8 @@ Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进�
 
 `v1.2.5` 收口同一真实任务中发现的文章兼容问题：零验证标记、明确标题、真实 `js_content` 容器且至少成功归档一张图片的纯图片文章不再被短正文门槛误判；旧版 HTTP 微信图片仅在 authority 按 ASCII 小写规范化后精确等于 `mmbiz.qpic.cn` 或 `mmbiz.qpic.cn:80` 时升级为 HTTPS，其他 HTTP、空 userinfo、空端口、尾点主机和越界 authority 仍拒绝。最终 523 条历史记录中，521 篇完成正文、原始 HTML 和媒体归档，2 篇源页面不可用；2828 个输出文件全部通过 SHA-256 复核。匿名化证据与发布后门禁见 [`docs/v1.2.5-validation.md`](./docs/v1.2.5-validation.md)。
 
+`v1.3.0` 来自一次真实 B站全量归档复盘：221 个唯一视频全部完成视频与 TXT/SRT/JSON，共 884 个产物、24,223,753,900 字节，逐文件路径、字节数和 SHA-256 均通过；11 个合集覆盖 154 个，另有 67 个未分类。新版本按平台内容标识幂等复用非失败任务，并在冻结的 B站作者清单中支持全部、仅缺失项、合集和明确 BVID 选择，父批次状态返回选择、合集与覆盖摘要。详见 [`docs/bilibili-v1.3.0-retrospective.md`](./docs/bilibili-v1.3.0-retrospective.md) 与 [`docs/v1.3.0-validation.md`](./docs/v1.3.0-validation.md)。
+
 这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
 
 ## 接下来准备做什么？
@@ -236,6 +254,7 @@ sh ./scripts/bootstrap.sh status
 ```bash
 sh ./scripts/bootstrap.sh inspect-creator '<视频号、B站或抖音链接>'
 sh ./scripts/bootstrap.sh download-creator-plan '<上一步任务编号>' '<确认数量>'
+sh ./scripts/bootstrap.sh download-creator-selection '<上一步任务编号>' '<all|missing|collection|explicit>' '[合集 ID 或 BVID ...]'
 ```
 
 公众号历史同样先盘点、再确认数量：
