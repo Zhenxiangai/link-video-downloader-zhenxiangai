@@ -150,7 +150,7 @@ install_dependencies() {
     brew_command=$(command -v brew 2>/dev/null || true)
     [ -n "$brew_command" ] || {
         echo "action_required=homebrew_missing"
-        echo "message=Hermes must review the official Homebrew installer, explain it, request approval, install Homebrew, then run this command again."
+        echo "message=The agent must review the official Homebrew installer, explain it, request approval, install Homebrew, then run this command again."
         exit 69
     }
     has ffmpeg || "$brew_command" install ffmpeg
@@ -354,7 +354,6 @@ install_backend_service() {
 
 install_all() {
     check_platform
-    has hermes || fail "hermes_missing"
     [ -n "$python_bin" ] && [ -x "$python_bin" ] || fail "python_missing"
     install_dependencies
     install_model

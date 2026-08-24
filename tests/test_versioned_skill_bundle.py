@@ -60,6 +60,10 @@ class VersionedSkillBundleTests(unittest.TestCase):
         worker_versions = [line.strip() for line in worker.splitlines() if line.startswith("VERSION =")]
         self.assertEqual(worker_versions, [f'VERSION = "{expected}"'])
 
+    def test_codex_install_does_not_require_hermes(self):
+        bootstrap = (REPOSITORY_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+        self.assertNotIn('has hermes || fail "hermes_missing"', bootstrap)
+
 
 
 if __name__ == "__main__":
