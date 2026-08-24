@@ -60,6 +60,14 @@ class BilibiliBatchV130Tests(unittest.TestCase):
             self.assertEqual(first["job_id"], second["job_id"])
             self.assertEqual(len(list((root / "jobs").glob("content-*/manifest.json"))), 1)
 
+    def test_different_bilibili_parts_do_not_reuse_one_content_job(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = archive.submit_content(f"https://www.bilibili.com/video/{BVIDS[0]}/?p=1", root)
+            second = archive.submit_content(f"https://www.bilibili.com/video/{BVIDS[0]}/?p=2", root)
+            self.assertFalse(second["reused"])
+            self.assertNotEqual(first["job_id"], second["job_id"])
+
     def test_failed_content_job_does_not_block_retry(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -96,6 +104,17 @@ class BilibiliBatchV130Tests(unittest.TestCase):
         with patch.object(archive, "bilibili_json", side_effect=responses):
             result = archive.bilibili_creator_collections("123")
         self.assertEqual(result, [{"id": "7", "name": "送礼", "available": 3, "item_ids": list(BVIDS)}])
+
+    def test_collection_inventory_removes_duplicate_seasons_across_pages(self):
+        season = {"meta": {"season_id": 7, "name": "送礼", "total": 1}}
+        responses = [
+            {"items_lists": {"page": {"total": 2}, "seasons_list": [season]}},
+            {"page": {"total": 1}, "archives": [{"bvid": BVIDS[0]}]},
+            {"items_lists": {"page": {"total": 2}, "seasons_list": [season]}},
+        ]
+        with patch.object(archive, "bilibili_json", side_effect=responses):
+            result = archive.bilibili_creator_collections("123")
+        self.assertEqual(result, [{"id": "7", "name": "送礼", "available": 1, "item_ids": [BVIDS[0]]}])
 
     def test_collection_api_failure_preserves_legacy_creator_inventory(self):
         class FakeYoutubeDL:
@@ -174,6 +193,41 @@ class BilibiliBatchV130Tests(unittest.TestCase):
             batch_id, _, _ = creator_batch(root)
             with self.assertRaisesRegex(archive.ArchiveError, "不属于该博主"):
                 archive.download_creator_selection(batch_id, "explicit", root, content_ids=["BV1zzzzzzzzz"])
+
+    def test_explicit_selection_rejects_invalid_or_duplicate_bvids(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for content_ids in (["not-a-bvid"], [BVIDS[0], BVIDS[0]]):
+                batch_id, _, _ = creator_batch(root)
+                with self.subTest(content_ids=content_ids), self.assertRaises(archive.ArchiveError):
+                    archive.download_creator_selection(batch_id, "explicit", root, content_ids=content_ids)
+
+    def test_legacy_numeric_count_and_compact_status_remain_compatible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            collection = {"id": "7", "name": "送礼", "available": 2, "item_ids": [BVIDS[0], BVIDS[1]]}
+            batch_id, manifest_path, manifest = creator_batch(root, [collection])
+
+            def submit(selected, selected_path, _root):
+                selected["status"] = "processing"
+                selected["counts"] = {"selected": 2, "processing": 2, "completed": 0, "failed": 0}
+                selected["child_job_ids"] = ["content-20260825T000000Z-00000001", "content-20260825T000000Z-00000002"]
+                archive.write_json(selected_path, selected)
+                return selected
+
+            with patch.object(archive, "_submit_creator_batch_children_unlocked", side_effect=submit):
+                planned = archive.download_creator_plan(batch_id, 2, root)
+            self.assertEqual(planned["counts"]["selected"], 2)
+
+            manifest = json.loads(manifest_path.read_text())
+            manifest["coverage"] = {"classified": 2, "unclassified": 1}
+            archive.write_json(manifest_path, manifest)
+            with patch.object(archive, "refresh_creator_batch", return_value=manifest):
+                status = archive.job_status(batch_id, root)["job"]
+            self.assertEqual(status["selection"], {"mode": "count", "selected": 2, "limit": 2, "order": "newest"})
+            self.assertEqual(status["collections"], [{"id": "7", "name": "送礼", "available": 2}])
+            self.assertNotIn("ids", status["selection"])
+            self.assertNotIn("item_ids", status["collections"][0])
 
     def test_empty_missing_selection_completes_without_children(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -83,9 +83,17 @@ sh ./scripts/bootstrap.sh install
 sh ./scripts/bootstrap.sh status
 ```
 
-`install` reuses Hermes' managed Python and obtains or reuses the pinned transparent derivative core, FFmpeg, whisper.cpp, the pinned model, and the Channels backend; no separate global Python is required. The core comes from an immutable commit and is verified as a complete source tree. It manages three user LaunchAgents: the backend, the legacy Channels transcriber, and the central content worker. Installation itself does not import Cookies, install a CA, change the system proxy, or log in to any account.
+`install` prefers Hermes' managed Python when present and otherwise uses `python3`, including from Codex. It obtains or reuses the pinned transparent derivative core, FFmpeg, whisper.cpp, the pinned model, and the Channels backend. The core comes from an immutable commit and is verified as a complete source tree. It manages three user LaunchAgents: the backend, the legacy Channels transcriber, and the central content worker. Installation itself does not import Cookies, install a CA, change the system proxy, or log in to any account.
 
-New computers and existing users install or upgrade the same Skill and rerun the three commands above:
+For a new Codex installation, ask Codex:
+
+```text
+Use $skill-installer to install this GitHub Skill: repo=Zhenxiangai/link-video-downloader-zhenxiangai, path=skill-releases/v1.3.0/wechat-archive, ref=v1.3.0
+```
+
+For an existing Codex installation, ask Codex to review and replace `~/.codex/skills/wechat-archive` with that released bundle. Jobs and archives remain under `~/Documents/WeChatArchive`, outside the Skill directory. The Skill becomes available to Codex on the next turn and does not require Hermes.
+
+Hermes users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
 hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.3.0/wechat-archive' --category social-media --name wechat-archive --force --yes

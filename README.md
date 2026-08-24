@@ -2,7 +2,7 @@
 
 # Link Video Downloader by ZhenxiangAI
 
-**把视频链接发给 Hermes，后台完成下载、整理和逐字稿生成。**
+**把视频链接发给 Codex 或 Hermes，后台完成下载、整理和逐字稿生成。**
 
 **微信公众号 · 视频号 · B站 · 小红书 · 抖音**
 
@@ -21,7 +21,7 @@
 
 ## 这个项目能做什么？
 
-这是一个给 Hermes 使用的本地内容归档 Skill。安装并完成首次设置后，你只需要把链接发给 Hermes：
+这是一个可供 Codex 或 Hermes 使用的本地内容归档 Skill。安装并完成首次设置后，你只需要把链接发给已安装该 Skill 的代理：
 
 - 发一个视频链接：下载这一条内容并生成逐字稿。
 - 发一个博主链接并说明“批量抓取”：先告诉你目前能看到多少条；B站还会报告合集覆盖和未分类数量，再按数量、合集、指定 BVID、全部或仅缺失项确认范围。
@@ -108,7 +108,7 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 
 ## 使用前需要准备什么？
 
-当前公开版本适用于 **Apple Silicon Mac**，并需要已经安装 Hermes。
+当前公开版本适用于 **Apple Silicon Mac**，可安装到 Codex 或 Hermes。Codex 路径使用系统 `python3`，不依赖 Hermes。
 
 首次使用通常只需要完成一次：
 
@@ -120,6 +120,22 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 以后同一博主和已冻结批次通常不需要重复这些步骤。视频号实时能力依赖微信页面生命周期，页面关闭、账号退出、平台要求验证、Mac 休眠或关机、系统撤销权限时，仍可能需要你在一次受控恢复窗口里手动打开任一视频号页面。项目不会承诺永久登录。
 
 ## 安装或升级
+
+### Codex
+
+首次安装时，在 Codex 中发送：
+
+```text
+请使用 $skill-installer 安装 GitHub Skill：repo=Zhenxiangai/link-video-downloader-zhenxiangai，path=skill-releases/v1.3.0/wechat-archive，ref=v1.3.0
+```
+
+已安装时，让 Codex 审查后用同一版本包更新 `~/.codex/skills/wechat-archive`。本地任务和归档位于 `~/Documents/WeChatArchive`，不在 Skill 目录中，升级不会删除它们。安装完成后，下一轮对话即可说：
+
+```text
+请检查并完成 Link Video Downloader 的首次设置。
+```
+
+### Hermes
 
 在 Hermes 所在的 Mac 上运行：
 

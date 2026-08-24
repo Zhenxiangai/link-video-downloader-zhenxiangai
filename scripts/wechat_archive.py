@@ -638,7 +638,12 @@ def submission_content_id(platform: str, url: str) -> str:
     }
     match = re.search(patterns.get(platform, r"(?!)"), url)
     if match:
-        return match.group(1)
+        content_id = match.group(1)
+        if platform == "bilibili":
+            page = dict(parse_qsl(_split_url(url).query)).get("p", "")
+            if page.isdecimal() and int(page) > 1:
+                return f"{content_id}:p{int(page)}"
+        return content_id
     if platform == "wechat_official_account":
         return official_article_metadata(url)["content_id"]
     return stable_content_id(platform, url)
@@ -2040,6 +2045,7 @@ def bilibili_json(path: str, query: dict) -> dict:
 
 def bilibili_creator_collections(creator_id: str) -> list[dict]:
     collections = []
+    seen_season_ids = set()
     page_number = 1
     listed = 0
     while True:
@@ -2053,8 +2059,9 @@ def bilibili_creator_collections(creator_id: str) -> list[dict]:
         for season in seasons:
             metadata = season.get("meta") or {}
             season_id = str(metadata.get("season_id") or "")
-            if not season_id:
+            if not season_id or season_id in seen_season_ids:
                 continue
+            seen_season_ids.add(season_id)
             item_ids = []
             archive_page = 1
             while True:
