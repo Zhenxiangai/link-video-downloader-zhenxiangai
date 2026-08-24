@@ -28,7 +28,7 @@ Submit one link and keep the video, image-text post, timeline-aligned raw transc
 |---|---|---|---|
 | WeChat Official Account | Article | Inventory first, then archive the user-confirmed scope | HTML + Markdown + images |
 | WeChat Channels | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
-| Bilibili | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
+| Bilibili | Idempotent video task | Frozen count, collection, explicit BVID, all, or missing-only selection | `video.mp4` + three raw transcript formats |
 | Xiaohongshu | Image-text or video | Later release | `正文.md` + `配图/`, or video and transcripts |
 | Douyin | Video | Inventory the total, then download the user-confirmed count | `video.mp4` + three raw transcript formats |
 
@@ -50,9 +50,9 @@ PYTHON="${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python"
 "$PYTHON" "$SCRIPT" status --job-id 'content-YYYYMMDDTHHMMSSZ-1234abcd'
 ```
 
-`extract` immediately returns one `content-*` job and a relative manifest path. The persistent content worker then downloads, archives, and transcribes sequentially. After the initial Channels session is established, routine requests reuse that local session without enabling capture or changing the proxy.
+`extract` immediately returns one `content-*` job and a relative manifest path. A repeated non-failed platform content identity reuses that Job. The persistent content worker then downloads, archives, and transcribes sequentially. After the initial Channels session is established, routine requests reuse that local session without enabling capture or changing the proxy.
 
-`download-channel-url` never opens or controls WeChat. Channels, Bilibili, and Douyin creator-history batches use two steps: inventory and freeze the visible list, ask how many items the user wants, then submit that count to the same parent Job only after the reply. For Channels, both known and newly shared creators first reuse the existing local session. A new public share contributes its nickname and avatar for exact matching against the search session. Successful identities are stored in a user-private local registry. This is conditional unattended operation: the Mac must be online and the required search and creator-feed session capabilities must still be live. See [SKILL.md](./SKILL.md) for routing.
+`download-channel-url` never opens or controls WeChat. Channels, Bilibili, and Douyin creator-history batches use two steps: inventory and freeze the visible list, ask for the scope, then submit to the same parent Job only after the reply. Bilibili also freezes collection membership and accepts all, missing-only, one collection, explicit BVIDs, or the legacy newest count. For Channels, both known and newly shared creators first reuse the existing local session. A new public share contributes its nickname and avatar for exact matching against the search session. Successful identities are stored in a user-private local registry. This is conditional unattended operation: the Mac must be online and the required search and creator-feed session capabilities must still be live. See [SKILL.md](./SKILL.md) for routing.
 
 ## Content packages
 
@@ -88,7 +88,7 @@ sh ./scripts/bootstrap.sh status
 New computers and existing users install or upgrade the same Skill and rerun the three commands above:
 
 ```bash
-hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.2.5/wechat-archive' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.3.0/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
 Existing `article-*`, `batch-*`, `channel-*`, `media-*`, `video_channels/`, and manifests remain in place. V1 adds no migrator, automatic updater, or rollback manager.
@@ -124,6 +124,8 @@ The new unified path has completed real Bilibili 1080p video, Xiaohongshu image-
 `v1.2.4` adapts to current WeChat for Mac Official Account sessions. The core accepts a Cookie-less session only for the exact HTTPS `mp.weixin.qq.com/mp/relatedsearchword` path when all eight required fields are present; every other entry still requires a Cookie. The wrapper persists the confirmed account `biz` on every page so a batch can resume from its saved cursor after an in-memory mapping expires. The real release task inventoried 523 articles; 327 had completed before release, two retained history entries had unavailable article pages, and the rest remained queued for session renewal. See [`docs/wechat-official-account-v3-retrospective.md`](./docs/wechat-official-account-v3-retrospective.md).
 
 `v1.2.5` closes two article compatibility gaps found while finishing that real batch. An image-only post is accepted only when it has zero verification markers, a non-generic title, a real `js_content` container, and at least one successfully archived image. A legacy HTTP WeChat media URL is upgraded to HTTPS only when its authority, after ASCII lowercase normalization, is exactly `mmbiz.qpic.cn` or `mmbiz.qpic.cn:80`; all other HTTP, empty userinfo, empty ports, trailing-dot hosts, and out-of-bound authorities remain rejected. Of 523 retained history entries, 521 completed with Markdown, original HTML, and media, while two source pages were unavailable. All 2,828 recorded output files passed SHA-256 verification. See the anonymized evidence and post-release gate in [`docs/v1.2.5-validation.md`](./docs/v1.2.5-validation.md).
+
+`v1.3.0` follows a real complete Bilibili archive: 221 unique videos produced 884 artifacts totaling 24,223,753,900 bytes, with every path, byte count, and SHA-256 verified. Eleven collections covered 154 videos and 67 remained unclassified. This release reuses non-failed tasks by platform content identity, freezes Bilibili collection membership, supports all, missing-only, collection, and explicit-BVID selection, and reports compact parent-batch selection and coverage status. See [`docs/bilibili-v1.3.0-retrospective.md`](./docs/bilibili-v1.3.0-retrospective.md) and [`docs/v1.3.0-validation.md`](./docs/v1.3.0-validation.md).
 
 Future versions plan to add Xiaohongshu creator batches. This release does not claim that capability.
 

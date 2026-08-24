@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "release": "v1.3.0",
+  "platform": "bilibili",
+  "creator_identity_included": false,
+  "completed": 221,
+  "unique_content_ids": 221,
+  "outputs": 884,
+  "total_bytes": 24223753900,
+  "collections": 11,
+  "collection_unique": 154,
+  "unclassified": 67,
+  "duplicate_jobs": 0,
+  "verification_issues": 0,
+  "manifest_set_root_sha256": "9c83ce85f3df406aa57a131a24c957754de4e063c400afc5df16ea8a64691848",
+  "output_record_set_root_sha256": "1a9b2878eaa875c050a8e016f7cf10db43a08bd2c6d741738b78f7373d861d7a"
+}
