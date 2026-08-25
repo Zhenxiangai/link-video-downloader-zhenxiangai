@@ -352,6 +352,31 @@ class OfficialBatchResilienceTests(unittest.TestCase):
 
             self.assertEqual(manifest["output_dir"], legacy.as_posix())
 
+    def test_legacy_output_migration_rejects_account_directory_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "archive"
+            outside = base / "outside"
+            outside.mkdir()
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            original = legacy_dir / "original.html"
+            original.write_text("unchanged", encoding="utf-8")
+            account_dir = root / "content" / "公众号" / "测试公众号--account-one"
+            account_dir.symlink_to(outside, target_is_directory=True)
+            manifest = {
+                "output_dir": archive.archive_relative(root, legacy_dir),
+                "outputs": [archive.output_record(root, original, "original_html")],
+            }
+
+            with self.assertRaisesRegex(archive.ArchiveError, "归档根目录之外"):
+                archive.group_legacy_official_output(
+                    manifest, root, {"name": "测试公众号", "account_id": "account-one"}
+                )
+
+            self.assertTrue(legacy_dir.is_dir())
+            self.assertFalse((outside / legacy_dir.name).exists())
+
     def test_refresh_migrates_skipped_existing_completed_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

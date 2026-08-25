@@ -3410,6 +3410,11 @@ def group_legacy_official_output(manifest: dict, root: Path, account: dict) -> b
     target_relative = platform_dir / official_account_dir(account) / relative.name
     source = root / relative
     target = root / target_relative
+    try:
+        source.resolve().relative_to(root.resolve())
+        target.parent.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ArchiveError("official_output_outside_root", "公众号迁移路径位于归档根目录之外，迁移已停止。", 65)
     target_prefix = f"{target_relative.as_posix()}/"
     outputs = manifest.get("outputs") or []
     if not outputs:
