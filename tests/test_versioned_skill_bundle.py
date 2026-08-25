@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-BUNDLE_ROOT = REPOSITORY_ROOT / "skill-releases" / "v1.3.0" / "wechat-archive"
+BUNDLE_ROOT = REPOSITORY_ROOT / "skill-releases" / "v1.3.1" / "wechat-archive"
 EXPECTED_FILES = (
     "SKILL.md",
     "references/LICENSE.md",
@@ -30,6 +30,14 @@ RELEASED_BUNDLE_SHA256 = {
         "scripts/manage_transcriber.sh": "3c89e64e6ec318a6830cbf758774a897b36133718a86d35bb02f58691c82daa1",
         "scripts/wechat_archive.py": "c91fda74f34e36f0beeceb39f6a7ece5dd309cb7a7b684167b1391a86008ed7b",
     },
+    "v1.3.0": {
+        "SKILL.md": "82ec8e661936f421d4b311e62e6070d5674d86250d6a227071e69a145be128dc",
+        "references/LICENSE.md": "3e285b32b2a9f98662fb6f0f603ac345e51d2b8ad43feb6334e290816d719755",
+        "references/THIRD_PARTY_NOTICES.md": "6c87795e74d9e65b66b8adb7d94f7322abff4d06e1fe5fd522300cee9101bee2",
+        "scripts/bootstrap.sh": "6dbc4451b02fdc6b66ede0608ab45925204f7155765f48e071547301da901790",
+        "scripts/manage_transcriber.sh": "3c89e64e6ec318a6830cbf758774a897b36133718a86d35bb02f58691c82daa1",
+        "scripts/wechat_archive.py": "56dd5b86cba88044ac8d403198f2fbde27e03ce247efea5e2c45685e0ab19e6a",
+    },
 }
 
 
@@ -52,7 +60,7 @@ class VersionedSkillBundleTests(unittest.TestCase):
                 self.assertEqual(bundled.read_bytes(), source.read_bytes())
 
     def test_stable_manifest_and_worker_versions_match(self):
-        expected = "1.3.0"
+        expected = "1.3.1"
         skill = (REPOSITORY_ROOT / "SKILL.md").read_text(encoding="utf-8")
         worker = (REPOSITORY_ROOT / "scripts/wechat_archive.py").read_text(encoding="utf-8")
         skill_versions = [line.strip() for line in skill.splitlines() if line.startswith("version:")]

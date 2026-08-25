@@ -126,7 +126,7 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 首次安装时，在 Codex 中发送：
 
 ```text
-请使用 $skill-installer 安装 GitHub Skill：repo=Zhenxiangai/link-video-downloader-zhenxiangai，path=skill-releases/v1.3.0/wechat-archive，ref=v1.3.0
+请使用 $skill-installer 安装 GitHub Skill：repo=Zhenxiangai/link-video-downloader-zhenxiangai，path=skill-releases/v1.3.1/wechat-archive，ref=v1.3.1
 ```
 
 已安装时，让 Codex 审查后用同一版本包更新 `~/.codex/skills/wechat-archive`。本地任务和归档位于 `~/Documents/WeChatArchive`，不在 Skill 目录中，升级不会删除它们。安装完成后，下一轮对话即可说：
@@ -140,10 +140,10 @@ Hermes：已按确认数量提交 5 个任务，正在后台下载和转写。
 在 Hermes 所在的 Mac 上运行：
 
 ```bash
-hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.3.0/wechat-archive' --category social-media --name wechat-archive --force --yes
+hermes skills install 'Zhenxiangai/link-video-downloader-zhenxiangai/skill-releases/v1.3.1/wechat-archive' --category social-media --name wechat-archive --force --yes
 ```
 
-该命令使用仓库内固定的 `v1.3.0` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
+该命令使用仓库内固定的 `v1.3.1` Skill 入口，由 Hermes 通过 GitHub Contents API 获取完整文件，避免 GitHub Raw 或 CDN 节点临时出现 429、503 和连接超时。
 
 安装 Skill 后，可以直接对 Hermes 说：
 
@@ -178,6 +178,7 @@ Hermes 会先检查环境，再解释缺少哪些组件和权限。涉及安装�
 ```text
 ~/Documents/WeChatArchive/
 ├── content/
+│   ├── 公众号/<博主名>--<账号标识>/<标题>--<文章标识>/
 │   ├── 视频号/<标题>--<作品标识>/
 │   ├── B站/<标题>--<作品标识>/
 │   ├── 小红书/<标题>--<作品标识>/
@@ -215,6 +216,8 @@ Cookie、账号凭证、浏览器资料、证书私钥和代理快照不会进�
 `v1.2.5` 收口同一真实任务中发现的文章兼容问题：零验证标记、明确标题、真实 `js_content` 容器且至少成功归档一张图片的纯图片文章不再被短正文门槛误判；旧版 HTTP 微信图片仅在 authority 按 ASCII 小写规范化后精确等于 `mmbiz.qpic.cn` 或 `mmbiz.qpic.cn:80` 时升级为 HTTPS，其他 HTTP、空 userinfo、空端口、尾点主机和越界 authority 仍拒绝。最终 523 条历史记录中，521 篇完成正文、原始 HTML 和媒体归档，2 篇源页面不可用；2828 个输出文件全部通过 SHA-256 复核。匿名化证据与发布后门禁见 [`docs/v1.2.5-validation.md`](./docs/v1.2.5-validation.md)。
 
 `v1.3.0` 来自一次真实 B站全量归档复盘：221 个唯一视频全部完成视频与 TXT/SRT/JSON，共 884 个产物、24,223,753,900 字节，逐文件路径、字节数和 SHA-256 均通过；11 个合集覆盖 154 个，另有 67 个未分类。新版本按平台内容标识幂等复用非失败任务，并在冻结的 B站作者清单中支持全部、仅缺失项、合集和明确 BVID 选择，父批次状态返回选择、合集与覆盖摘要。详见 [`docs/bilibili-v1.3.0-retrospective.md`](./docs/bilibili-v1.3.0-retrospective.md) 与 [`docs/v1.3.0-validation.md`](./docs/v1.3.0-validation.md)。
+
+`v1.3.1` 来自一次 524 篇公众号真实全量归档：522 篇完成、2 篇为空正文并明确归类为 `unavailable`，2832 个输出文件、1,850,999,065 字节全部通过 SHA-256 复核。该版补齐会话失效后的原任务恢复与重试、活跃队列连续处理，并将公众号输出按“博主名 + 稳定账号标识”分层；存量单层目录可在父批次刷新时原子迁移，冲突时失败关闭。详见 [`docs/wechat-official-account-v3-retrospective.md`](./docs/wechat-official-account-v3-retrospective.md)。
 
 这证明的是小批量端到端流程已经跑通，不代表平台接口未来永远不会变化。平台改版、风控或登录策略变化后，项目可能仍需要适配更新。
 
