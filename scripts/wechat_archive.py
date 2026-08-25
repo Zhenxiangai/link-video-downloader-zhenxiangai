@@ -741,8 +741,13 @@ def safe_content_title(value: str, fallback: str) -> str:
 
 def official_account_dir(account: dict) -> str:
     name = safe_content_title(str(account.get("name") or "未知公众号"), "未知公众号")
-    account_id = safe_content_title(str(account.get("account_id") or ""), "")
-    return f"{name}--{account_id}" if account_id else name
+    account_id = str(account.get("account_id") or "")
+    if not account_id and account.get("biz"):
+        account_id = hashlib.sha256(f"wechat_official_account\0{account['biz']}".encode()).hexdigest()[:16]
+    account_id = safe_content_title(account_id, "")
+    if not account_id:
+        raise ArchiveError("official_account_identity_missing", "公众号缺少稳定账号标识，已停止落盘。", 65)
+    return f"{name}--{account_id}"
 
 
 def submit_content(url: str, root: Path) -> dict:
@@ -1046,11 +1051,16 @@ def pause_official_parent(manifest: dict, root: Path, exc: ArchiveError) -> None
         parent = read_json_if_valid(parent_path)
         if not parent or parent.get("kind") != "batch" or parent.get("platform") != "wechat_official_account":
             return
+        backend_unavailable = exc.code == "channels_backend_unavailable"
         parent.update(
             {
-                "status": "waiting_for_reauthentication",
+                "status": "waiting_for_authorization" if backend_unavailable else "waiting_for_reauthentication",
                 "updated_at": utc_now(),
-                "next_action": "请在 Mac 微信中手动打开任意一篇该公众号文章，会话恢复后继续同一 Job。",
+                "next_action": (
+                    "公众号本地会话后端不可用，请先运行安装状态检查并恢复本地服务，再继续同一 Job。"
+                    if backend_unavailable
+                    else "请在 Mac 微信中手动打开任意一篇该公众号文章，会话恢复后继续同一 Job。"
+                ),
                 "last_retry_error": {"code": exc.code, "message": str(exc)},
             }
         )
@@ -1109,6 +1119,11 @@ def _process_content_job_unlocked(
             and isinstance(exc, ArchiveError)
             and exc.code in OFFICIAL_SESSION_ERROR_CODES
         )
+        official_backend_unavailable = (
+            platform == "wechat_official_account"
+            and isinstance(exc, ArchiveError)
+            and exc.code == "channels_backend_unavailable"
+        )
         channels_transient = isinstance(exc, ArchiveError) and exc.code in {
             "channels_backend_unavailable",
             "channels_backend_error",
@@ -1129,8 +1144,9 @@ def _process_content_job_unlocked(
             manifest.update(
                 {
                     "status": (
-                        "waiting_for_reauthentication"
-                        if platform == "wechat_official_account"
+                        "waiting_for_authorization"
+                        if official_backend_unavailable
+                        else "waiting_for_reauthentication" if platform == "wechat_official_account"
                         else "waiting_for_authorization" if channels or not cookie_jar.is_file() else "waiting_for_reauthentication"
                     ),
                     "updated_at": utc_now(),
@@ -1141,7 +1157,11 @@ def _process_content_job_unlocked(
                         )
                         if channels
                         else (
-                            "公众号会话当前不可用，原任务已保留。请在 Mac 微信中手动打开任意一篇该公众号文章，会话恢复后继续同一 Job。"
+                            (
+                                "公众号本地会话后端不可用，原任务已保留。请先运行安装状态检查并恢复本地服务，再继续同一 Job。"
+                                if official_backend_unavailable
+                                else "公众号会话当前不可用，原任务已保留。请在 Mac 微信中手动打开任意一篇该公众号文章，会话恢复后继续同一 Job。"
+                            )
                             if platform == "wechat_official_account"
                             else "请在已授权的 Safari 或 Chrome 登录该平台后，导入持久 Cookie 并继续原任务。"
                         )
@@ -3381,33 +3401,58 @@ def existing_official_content(root: Path, content_id: str) -> dict | None:
 
 def group_legacy_official_output(manifest: dict, root: Path, account: dict) -> bool:
     changed = manifest.get("account") != account
-    manifest["account"] = account
     relative = Path(str(manifest.get("output_dir") or ""))
     platform_dir = Path("content") / PLATFORM_DIRS["wechat_official_account"]
     if relative.parent != platform_dir:
+        manifest["account"] = account
         return changed
 
     target_relative = platform_dir / official_account_dir(account) / relative.name
     source = root / relative
     target = root / target_relative
-    prefix = f"{relative.as_posix()}/"
     target_prefix = f"{target_relative.as_posix()}/"
+    outputs = manifest.get("outputs") or []
+    if not outputs:
+        raise ArchiveError("official_output_records_missing", "公众号文章没有可验证的输出记录，迁移已停止。", 65)
     output_paths = []
-    for output in manifest.get("outputs") or []:
+    for output in outputs:
         path = str(output.get("path") or "")
-        if not path.startswith(prefix):
+        try:
+            suffix = Path(path).relative_to(relative)
+        except ValueError:
             raise ArchiveError("official_output_path_mismatch", "公众号输出记录不属于文章目录，迁移已停止。", 65)
-        output_paths.append(f"{target_prefix}{path[len(prefix):]}")
+        if not suffix.parts or ".." in suffix.parts:
+            raise ArchiveError("official_output_path_mismatch", "公众号输出记录不属于文章目录，迁移已停止。", 65)
+        output_paths.append(f"{target_prefix}{suffix.as_posix()}")
     if source.is_dir() and target.exists():
         raise ArchiveError("official_output_conflict", "公众号博主目录已存在同名文章，迁移已停止。", 73)
-    if source.is_dir():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(source, target)
-    elif not target.is_dir():
+    if source.is_symlink() or target.is_symlink():
+        raise ArchiveError("official_output_symlink", "公众号文章目录不能是符号链接，迁移已停止。", 65)
+    source_exists = source.is_dir()
+    if not source_exists and not target.is_dir():
         raise ArchiveError("official_output_missing", "公众号文章目录不存在，迁移已停止。", 66)
 
-    for output, path in zip(manifest.get("outputs") or [], output_paths):
+    verification_paths = [root / str(output["path"]) for output in outputs] if source_exists else [root / path for path in output_paths]
+    verification_root = source.resolve() if source_exists else target.resolve()
+    for output, path in zip(outputs, verification_paths):
+        try:
+            path.resolve().relative_to(verification_root)
+        except ValueError:
+            raise ArchiveError("official_output_path_mismatch", "公众号输出记录不属于文章目录，迁移已停止。", 65)
+        if (
+            not path.is_file()
+            or path.stat().st_size != int(output.get("bytes") if output.get("bytes") is not None else -1)
+            or sha256_file(path) != str(output.get("sha256") or "")
+        ):
+            raise ArchiveError("official_output_recovery_mismatch", "公众号迁移目标校验失败，迁移已停止。", 65)
+
+    if source_exists:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+
+    for output, path in zip(outputs, output_paths):
         output["path"] = path
+    manifest["account"] = account
     manifest["output_dir"] = target_relative.as_posix()
     return True
 
@@ -3419,8 +3464,7 @@ def _refresh_official_batch_unlocked(manifest: dict, manifest_path: Path, root: 
     selected_items = (manifest.get("items") or [])[: int((manifest.get("selection") or {}).get("limit") or 0)]
     skipped = sum(item.get("result") == "skipped_existing" for item in selected_items)
     for item in selected_items:
-        if item.get("result") == "skipped_existing":
-            continue
+        skipped_existing = item.get("result") == "skipped_existing"
         child_id = item.get("child_job_id")
         child_path = root / "jobs" / str(child_id) / "manifest.json"
         if not child_id or not child_path.is_file():
@@ -3436,6 +3480,8 @@ def _refresh_official_batch_unlocked(manifest: dict, manifest_path: Path, root: 
             account = manifest.get("account") if isinstance(manifest.get("account"), dict) else {}
             if group_legacy_official_output(child, root, account):
                 write_json(child_path, child)
+            if skipped_existing:
+                continue
             item.update({"result": "completed", "error_code": None})
             completed += 1
         elif status in {"failed", "unavailable"}:

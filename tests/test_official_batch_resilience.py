@@ -17,6 +17,10 @@ SPEC.loader.exec_module(archive)
 
 
 class OfficialBatchResilienceTests(unittest.TestCase):
+    def test_official_account_directory_requires_stable_identity(self):
+        with self.assertRaisesRegex(archive.ArchiveError, "稳定账号标识"):
+            archive.official_account_dir({"name": "同名公众号"})
+
     def test_finalize_official_article_groups_output_by_account(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -324,6 +328,68 @@ class OfficialBatchResilienceTests(unittest.TestCase):
 
             self.assertTrue(legacy_dir.is_dir())
 
+    def test_legacy_output_migration_rejects_unverified_recovery_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = Path("content/公众号/测试文章--article-one")
+            target = root / "content" / "公众号" / "测试公众号--account-one" / legacy.name
+            target.mkdir(parents=True)
+            manifest = {
+                "output_dir": legacy.as_posix(),
+                "outputs": [
+                    {
+                        "path": f"{legacy.as_posix()}/original.html",
+                        "bytes": 9,
+                        "sha256": archive.hashlib.sha256(b"unchanged").hexdigest(),
+                    }
+                ],
+            }
+
+            with self.assertRaisesRegex(archive.ArchiveError, "迁移目标校验失败"):
+                archive.group_legacy_official_output(
+                    manifest, root, {"name": "测试公众号", "account_id": "account-one"}
+                )
+
+            self.assertEqual(manifest["output_dir"], legacy.as_posix())
+
+    def test_refresh_migrates_skipped_existing_completed_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            original = legacy_dir / "original.html"
+            original.write_text("unchanged", encoding="utf-8")
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "status": "completed",
+                    "output_dir": archive.archive_relative(root, legacy_dir),
+                    "outputs": [archive.output_record(root, original, "original_html")],
+                },
+            )
+            parent = {
+                "job_id": parent_id,
+                "kind": "batch",
+                "platform": "wechat_official_account",
+                "status": "processing",
+                "account": {"name": "测试公众号", "account_id": "account-one"},
+                "selection": {"limit": 1},
+                "items": [{"child_job_id": child_id, "result": "skipped_existing"}],
+            }
+            archive.write_json(parent_path, parent)
+
+            refreshed = archive.refresh_official_batch(parent, parent_path, root)
+
+            target = root / "content" / "公众号" / "测试公众号--account-one" / legacy_dir.name
+            self.assertTrue((target / "original.html").is_file())
+            self.assertEqual(refreshed["items"][0]["result"], "skipped_existing")
+            self.assertEqual(refreshed["counts"]["skipped_existing"], 1)
+
     def test_process_official_article_uses_local_session_backend(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -411,6 +477,46 @@ class OfficialBatchResilienceTests(unittest.TestCase):
                     final = archive.process_content_job(root / "jobs" / child_ids[0] / "manifest.json", root)
             self.assertEqual(final["status"], "waiting_for_reauthentication")
             self.assertEqual(json.loads(parent_path.read_text(encoding="utf-8"))["status"], "waiting_for_reauthentication")
+
+    def test_official_backend_unavailable_requests_local_service_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            archive.write_json(
+                parent_path,
+                {
+                    "job_id": parent_id,
+                    "kind": "batch",
+                    "platform": "wechat_official_account",
+                    "status": "processing",
+                    "selection": {"limit": 1},
+                    "items": [{"child_job_id": child_id, "result": "processing"}],
+                },
+            )
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "kind": "content",
+                    "platform": "wechat_official_account",
+                    "parent_job_id": parent_id,
+                    "status": "queued",
+                    "source": "https://mp.weixin.qq.com/s?__biz=biz&mid=1&idx=1&sn=test",
+                },
+            )
+            unavailable = archive.ArchiveError("channels_backend_unavailable", "backend down", 69)
+
+            with patch.object(archive, "process_official_article", side_effect=unavailable):
+                child = archive.process_content_job(child_path, root)
+
+            parent = json.loads(parent_path.read_text(encoding="utf-8"))
+            self.assertEqual(child["status"], "waiting_for_authorization")
+            self.assertIn("本地会话后端", child["next_action"])
+            self.assertNotIn("打开任意一篇", child["next_action"])
+            self.assertEqual(parent["status"], "waiting_for_authorization")
 
     def test_resume_official_batch_requeues_retryable_children_in_place(self):
         with tempfile.TemporaryDirectory() as temporary:
