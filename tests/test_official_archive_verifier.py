@@ -34,7 +34,7 @@ class OfficialArchiveVerifierTests(unittest.TestCase):
         parent_job_id = "batch-20000101T000000Z-00000000"
         completed_job_id = "content-20000101T000000Z-11111111"
         unavailable_job_id = "content-20000101T000000Z-22222222"
-        output_dir = root / "content" / "公众号" / "article--one"
+        output_dir = root / "content" / "公众号" / "测试公众号--account-one" / "article--one"
         output_dir.mkdir(parents=True)
         original = output_dir / "original.html"
         body = output_dir / "正文.md"

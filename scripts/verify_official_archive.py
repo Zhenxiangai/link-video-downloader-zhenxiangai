@@ -151,7 +151,16 @@ def verify_archive(root: Path, parent_job_id: str) -> dict:
         errors["duplicate_output_path"] += duplicate_output_paths
 
     content_root = root / "content" / "公众号"
-    actual_dirs = {path.resolve() for path in content_root.iterdir() if path.is_dir()} if content_root.is_dir() else set()
+    actual_dirs = (
+        {
+            path.parent.resolve()
+            for name in ("original.html", "正文.md")
+            for path in content_root.rglob(name)
+            if path.is_file()
+        }
+        if content_root.is_dir()
+        else set()
+    )
     missing_dirs = len(expected_dirs - actual_dirs)
     extra_dirs = len(actual_dirs - expected_dirs)
     if missing_dirs:

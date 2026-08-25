@@ -17,6 +17,40 @@ SPEC.loader.exec_module(archive)
 
 
 class OfficialBatchResilienceTests(unittest.TestCase):
+    def test_official_account_directory_requires_stable_identity(self):
+        with self.assertRaisesRegex(archive.ArchiveError, "稳定账号标识"):
+            archive.official_account_dir({"name": "同名公众号"})
+
+    def test_finalize_official_article_groups_output_by_account(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job_dir = root / "jobs" / "content-20000101T000000Z-00000000"
+            job_dir.mkdir(parents=True)
+            (job_dir / "original.html").write_text("<html></html>", encoding="utf-8")
+            (job_dir / "article.md").write_text("# 正文", encoding="utf-8")
+            manifest_path = job_dir / "manifest.json"
+            manifest = {
+                "job_id": job_dir.name,
+                "kind": "content",
+                "platform": "wechat_official_account",
+                "status": "downloading",
+                "content_id": "article-one",
+                "title": "测试文章",
+                "account": {"name": "测试公众号", "account_id": "account-one"},
+            }
+
+            completed = archive.finalize_official_article(
+                manifest,
+                manifest_path,
+                root,
+                "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test",
+            )
+
+            expected = "content/公众号/测试公众号--account-one/测试文章--article-one"
+            self.assertEqual(completed["output_dir"], expected)
+            self.assertTrue((root / expected / "original.html").is_file())
+            self.assertTrue((root / expected / "正文.md").is_file())
+
     def test_discovery_persists_biz_across_pages(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -190,6 +224,197 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             self.assertEqual(refreshed["items"][0]["error_code"], "child_manifest_invalid")
             self.assertEqual(refreshed["status"], "completed_with_failures")
 
+    def test_refresh_reclassifies_legacy_empty_article_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            parent_path.parent.mkdir(parents=True)
+            child_path.parent.mkdir(parents=True)
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "parent_job_id": parent_id,
+                    "platform": "wechat_official_account",
+                    "status": "failed",
+                    "error": {"code": "article_not_found", "message": "empty article"},
+                },
+            )
+            archive.write_json(
+                parent_path,
+                {
+                    "job_id": parent_id,
+                    "kind": "batch",
+                    "platform": "wechat_official_account",
+                    "status": "processing",
+                    "selection": {"limit": 1},
+                    "items": [{"content_id": "article-1", "child_job_id": child_id, "result": "processing"}],
+                },
+            )
+
+            refreshed = archive.refresh_official_batch(
+                json.loads(parent_path.read_text(encoding="utf-8")), parent_path, root
+            )
+
+            self.assertEqual(json.loads(child_path.read_text(encoding="utf-8"))["status"], "unavailable")
+            self.assertEqual(refreshed["items"][0]["result"], "unavailable")
+            self.assertEqual(refreshed["counts"]["unavailable"], 1)
+            self.assertEqual(refreshed["counts"]["failed"], 0)
+
+    def test_refresh_moves_legacy_completed_output_into_account_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            original = legacy_dir / "original.html"
+            original.write_text("unchanged", encoding="utf-8")
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "parent_job_id": parent_id,
+                    "platform": "wechat_official_account",
+                    "status": "completed",
+                    "content_id": "article-one",
+                    "output_dir": archive.archive_relative(root, legacy_dir),
+                    "outputs": [archive.output_record(root, original, "original_html")],
+                },
+            )
+            archive.write_json(
+                parent_path,
+                {
+                    "job_id": parent_id,
+                    "kind": "batch",
+                    "platform": "wechat_official_account",
+                    "status": "processing",
+                    "account": {"name": "测试公众号", "account_id": "account-one"},
+                    "selection": {"limit": 1},
+                    "items": [{"content_id": "article-one", "child_job_id": child_id, "result": "processing"}],
+                },
+            )
+
+            archive.refresh_official_batch(
+                json.loads(parent_path.read_text(encoding="utf-8")), parent_path, root
+            )
+
+            expected = root / "content" / "公众号" / "测试公众号--account-one" / legacy_dir.name
+            saved = json.loads(child_path.read_text(encoding="utf-8"))
+            self.assertFalse(legacy_dir.exists())
+            self.assertEqual(saved["output_dir"], archive.archive_relative(root, expected))
+            self.assertEqual(saved["outputs"][0]["path"], archive.archive_relative(root, expected / "original.html"))
+            self.assertEqual((expected / "original.html").read_text(encoding="utf-8"), "unchanged")
+
+    def test_legacy_output_migration_validates_records_before_move(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            manifest = {
+                "output_dir": archive.archive_relative(root, legacy_dir),
+                "outputs": [{"path": "content/公众号/其他文章/file"}],
+            }
+
+            with self.assertRaisesRegex(archive.ArchiveError, "输出记录不属于文章目录"):
+                archive.group_legacy_official_output(
+                    manifest, root, {"name": "测试公众号", "account_id": "account-one"}
+                )
+
+            self.assertTrue(legacy_dir.is_dir())
+
+    def test_legacy_output_migration_rejects_unverified_recovery_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = Path("content/公众号/测试文章--article-one")
+            target = root / "content" / "公众号" / "测试公众号--account-one" / legacy.name
+            target.mkdir(parents=True)
+            manifest = {
+                "output_dir": legacy.as_posix(),
+                "outputs": [
+                    {
+                        "path": f"{legacy.as_posix()}/original.html",
+                        "bytes": 9,
+                        "sha256": archive.hashlib.sha256(b"unchanged").hexdigest(),
+                    }
+                ],
+            }
+
+            with self.assertRaisesRegex(archive.ArchiveError, "迁移目标校验失败"):
+                archive.group_legacy_official_output(
+                    manifest, root, {"name": "测试公众号", "account_id": "account-one"}
+                )
+
+            self.assertEqual(manifest["output_dir"], legacy.as_posix())
+
+    def test_legacy_output_migration_rejects_account_directory_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "archive"
+            outside = base / "outside"
+            outside.mkdir()
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            original = legacy_dir / "original.html"
+            original.write_text("unchanged", encoding="utf-8")
+            account_dir = root / "content" / "公众号" / "测试公众号--account-one"
+            account_dir.symlink_to(outside, target_is_directory=True)
+            manifest = {
+                "output_dir": archive.archive_relative(root, legacy_dir),
+                "outputs": [archive.output_record(root, original, "original_html")],
+            }
+
+            with self.assertRaisesRegex(archive.ArchiveError, "归档根目录之外"):
+                archive.group_legacy_official_output(
+                    manifest, root, {"name": "测试公众号", "account_id": "account-one"}
+                )
+
+            self.assertTrue(legacy_dir.is_dir())
+            self.assertFalse((outside / legacy_dir.name).exists())
+
+    def test_refresh_migrates_skipped_existing_completed_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            legacy_dir = root / "content" / "公众号" / "测试文章--article-one"
+            legacy_dir.mkdir(parents=True)
+            original = legacy_dir / "original.html"
+            original.write_text("unchanged", encoding="utf-8")
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "status": "completed",
+                    "output_dir": archive.archive_relative(root, legacy_dir),
+                    "outputs": [archive.output_record(root, original, "original_html")],
+                },
+            )
+            parent = {
+                "job_id": parent_id,
+                "kind": "batch",
+                "platform": "wechat_official_account",
+                "status": "processing",
+                "account": {"name": "测试公众号", "account_id": "account-one"},
+                "selection": {"limit": 1},
+                "items": [{"child_job_id": child_id, "result": "skipped_existing"}],
+            }
+            archive.write_json(parent_path, parent)
+
+            refreshed = archive.refresh_official_batch(parent, parent_path, root)
+
+            target = root / "content" / "公众号" / "测试公众号--account-one" / legacy_dir.name
+            self.assertTrue((target / "original.html").is_file())
+            self.assertEqual(refreshed["items"][0]["result"], "skipped_existing")
+            self.assertEqual(refreshed["counts"]["skipped_existing"], 1)
+
     def test_process_official_article_uses_local_session_backend(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -223,6 +448,170 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             session_fetch.assert_called_once_with(source)
             archive_html.assert_called_once()
             finalize.assert_called_once()
+
+    def test_official_fetch_failure_retries_current_child_before_pausing_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_ids = ["content-20000101T000000Z-00000001", "content-20000101T000000Z-00000002"]
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            parent_path.parent.mkdir(parents=True)
+            parent = {
+                "job_id": parent_id,
+                "kind": "batch",
+                "platform": "wechat_official_account",
+                "status": "processing",
+                "selection": {"limit": 2, "order": "newest"},
+                "items": [
+                    {"content_id": f"article-{index}", "child_job_id": child_id, "result": "processing"}
+                    for index, child_id in enumerate(child_ids)
+                ],
+            }
+            archive.write_json(parent_path, parent)
+            for child_id in child_ids:
+                child_path = root / "jobs" / child_id / "manifest.json"
+                child_path.parent.mkdir(parents=True)
+                archive.write_json(
+                    child_path,
+                    {
+                        "job_id": child_id,
+                        "kind": "content",
+                        "platform": "wechat_official_account",
+                        "parent_job_id": parent_id,
+                        "status": "queued",
+                        "source": "https://mp.weixin.qq.com/s?__biz=biz&mid=1&idx=1&sn=test",
+                    },
+                )
+
+            failure = archive.ArchiveError("official_article_fetch_failed", "公众号正文读取失败。", 69)
+            with patch.object(archive, "process_official_article", side_effect=failure):
+                first = archive.process_content_job(root / "jobs" / child_ids[0] / "manifest.json", root)
+            self.assertEqual(first["status"], "queued")
+            self.assertEqual(first["official_fetch_retries"], 1)
+            self.assertEqual(json.loads(parent_path.read_text(encoding="utf-8"))["status"], "processing")
+
+            with patch.object(archive, "process_official_article") as process_article:
+                archive.content_worker_once(root)
+            process_article.assert_called_once()
+            self.assertEqual(process_article.call_args.args[0]["job_id"], child_ids[0])
+            second = json.loads((root / "jobs" / child_ids[1] / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(second["status"], "queued")
+
+            with patch.object(archive, "process_official_article", side_effect=failure):
+                for _ in range(archive.OFFICIAL_FETCH_MAX_RETRIES):
+                    final = archive.process_content_job(root / "jobs" / child_ids[0] / "manifest.json", root)
+            self.assertEqual(final["status"], "waiting_for_reauthentication")
+            self.assertEqual(json.loads(parent_path.read_text(encoding="utf-8"))["status"], "waiting_for_reauthentication")
+
+    def test_official_backend_unavailable_requests_local_service_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_id = "content-20000101T000000Z-00000001"
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            child_path = root / "jobs" / child_id / "manifest.json"
+            archive.write_json(
+                parent_path,
+                {
+                    "job_id": parent_id,
+                    "kind": "batch",
+                    "platform": "wechat_official_account",
+                    "status": "processing",
+                    "selection": {"limit": 1},
+                    "items": [{"child_job_id": child_id, "result": "processing"}],
+                },
+            )
+            archive.write_json(
+                child_path,
+                {
+                    "job_id": child_id,
+                    "kind": "content",
+                    "platform": "wechat_official_account",
+                    "parent_job_id": parent_id,
+                    "status": "queued",
+                    "source": "https://mp.weixin.qq.com/s?__biz=biz&mid=1&idx=1&sn=test",
+                },
+            )
+            unavailable = archive.ArchiveError("channels_backend_unavailable", "backend down", 69)
+
+            with patch.object(archive, "process_official_article", side_effect=unavailable):
+                child = archive.process_content_job(child_path, root)
+
+            parent = json.loads(parent_path.read_text(encoding="utf-8"))
+            self.assertEqual(child["status"], "waiting_for_authorization")
+            self.assertIn("本地会话后端", child["next_action"])
+            self.assertNotIn("打开任意一篇", child["next_action"])
+            self.assertEqual(parent["status"], "waiting_for_authorization")
+
+    def test_resume_official_batch_requeues_retryable_children_in_place(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent_id = "batch-20000101T000000Z-00000000"
+            child_ids = ["content-20000101T000000Z-00000001", "content-20000101T000000Z-00000002"]
+            parent_path = root / "jobs" / parent_id / "manifest.json"
+            parent_path.parent.mkdir(parents=True)
+            archive.write_json(
+                parent_path,
+                {
+                    "job_id": parent_id,
+                    "kind": "batch",
+                    "platform": "wechat_official_account",
+                    "status": "completed_with_failures",
+                    "completed_at": "2000-01-01T00:00:00Z",
+                    "selection": {"limit": 2, "order": "newest"},
+                    "items": [
+                        {
+                            "content_id": f"article-{index}",
+                            "child_job_id": child_id,
+                            "result": "failed",
+                            "error_code": "official_article_fetch_failed",
+                        }
+                        for index, child_id in enumerate(child_ids)
+                    ],
+                },
+            )
+            for child_id in child_ids:
+                child_path = root / "jobs" / child_id / "manifest.json"
+                child_path.parent.mkdir(parents=True)
+                archive.write_json(
+                    child_path,
+                    {
+                        "job_id": child_id,
+                        "kind": "content",
+                        "platform": "wechat_official_account",
+                        "parent_job_id": parent_id,
+                        "status": "failed",
+                        "completed_at": "2000-01-01T00:00:00Z",
+                        "official_fetch_retries": 7,
+                        "error": {"code": "official_article_fetch_failed", "message": "failed"},
+                    },
+                )
+
+            result = archive.resume_job(parent_id, root)
+
+            self.assertEqual(result["resumed_jobs"], 2)
+            self.assertEqual(result["status"], "processing")
+            saved_parent = json.loads(parent_path.read_text(encoding="utf-8"))
+            self.assertNotIn("completed_at", saved_parent)
+            self.assertEqual([item["child_job_id"] for item in saved_parent["items"]], child_ids)
+            for child_id in child_ids:
+                child = json.loads((root / "jobs" / child_id / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(child["status"], "queued")
+                self.assertNotIn("error", child)
+                self.assertNotIn("official_fetch_retries", child)
+
+    def test_content_worker_sleeps_only_when_idle(self):
+        worker = {"counts": {}}
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(archive, "content_worker_once", side_effect=[(worker, True), (worker, False)]) as run_once,
+            patch.object(archive.time, "sleep", side_effect=RuntimeError("stop")) as sleep,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                archive.watch_content(Path(temporary), interval=10, once=False)
+
+        self.assertEqual(run_once.call_count, 2)
+        sleep.assert_called_once_with(10)
 
     def test_session_backend_request_uses_non_browser_local_header(self):
         source = "https://mp.weixin.qq.com/s?__biz=biz-one&mid=1&idx=1&sn=test"
@@ -443,7 +832,9 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             manifest = {
                 "job_id": parent_dir.name,
                 "kind": "batch",
+                "platform": "wechat_official_account",
                 "status": "processing",
+                "account": {"name": "测试公众号", "account_id": "account-one", "biz": "biz-one"},
                 "selection": {"limit": 1, "order": "newest"},
                 "items": [
                     {
@@ -463,6 +854,7 @@ class OfficialBatchResilienceTests(unittest.TestCase):
             child = json.loads((root / "jobs" / child_id / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(child["published_at"], "2026-08-12T12:00:00Z")
             self.assertEqual(child["title"], "测试文章")
+            self.assertEqual(child["account"], manifest["account"])
 
 
 if __name__ == "__main__":
